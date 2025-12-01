@@ -54,7 +54,10 @@ export default function Reports({ user }: ReportsProps) {
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>(
     user.role === 'employee' ? [user.id] : []
   )
-  const [selectedTeam, setSelectedTeam] = useState<string>('all')
+  // Auto-select user's team for non-admin users
+  const [selectedTeam, setSelectedTeam] = useState<string>(
+    user.role === 'admin' ? 'all' : (user.team || 'all')
+  )
   const [selectedProject, setSelectedProject] = useState<string>('all')
   const [selectedRole, setSelectedRole] = useState<string>('all')
   const [showUserDropdown, setShowUserDropdown] = useState(false)
@@ -66,7 +69,11 @@ export default function Reports({ user }: ReportsProps) {
 
   useEffect(() => {
     fetchFilterOptions()
-  }, [user.id])
+    // Auto-set team for non-admin users
+    if (user.role !== 'admin' && user.team) {
+      setSelectedTeam(user.team)
+    }
+  }, [user.id, user.team, user.role])
 
   useEffect(() => {
     // Close dropdown when clicking outside
@@ -96,12 +103,13 @@ export default function Reports({ user }: ReportsProps) {
         const { data } = await supabase.from('profiles').select('*').order('full_name')
         setTeamMembers(data || [])
       } else if (user.role === 'manager' || user.role === 'hr') {
-        const { data: managed } = await supabase
-          .from('employee_managers')
-          .select('employee_id, profiles:profiles!employee_managers_employee_id_fkey(*)')
+        // Manager can see their team members - get all users who have this manager assigned
+        const { data: teamMembers } = await supabase
+          .from('profiles')
+          .select('*')
           .eq('manager_id', user.id)
-        const members = managed?.map((m: any) => m.profiles).filter(Boolean) || []
-        setTeamMembers([user, ...members])
+          .order('full_name')
+        setTeamMembers([user, ...(teamMembers || [])])
       } else {
         setTeamMembers([user])
       }
@@ -154,12 +162,12 @@ export default function Reports({ user }: ReportsProps) {
       if (user.role === 'employee') {
         userIdsToFilter = [user.id]
       } else if (user.role === 'manager' || user.role === 'hr') {
-        // Get all team members
-        const { data: managed } = await supabase
-          .from('employee_managers')
-          .select('employee_id')
+        // Get all team members - users who have this manager assigned
+        const { data: teamMembers } = await supabase
+          .from('profiles')
+          .select('id')
           .eq('manager_id', user.id)
-        userIdsToFilter = [user.id, ...(managed?.map((m) => m.employee_id) || [])]
+        userIdsToFilter = [user.id, ...(teamMembers?.map((m) => m.id) || [])]
       } else if (user.role === 'admin') {
         // Admin can see all users initially
         const { data: allUsers } = await supabase
@@ -174,7 +182,9 @@ export default function Reports({ user }: ReportsProps) {
       }
 
       // Apply team filter
-      if (selectedTeam !== 'all' && (user.role === 'admin' || user.role === 'manager' || user.role === 'hr')) {
+      // For admins: apply if selectedTeam is not 'all'
+      // For non-admins: always apply their team filter
+      if (selectedTeam !== 'all') {
         const { data: teamUsers } = await supabase
           .from('profiles')
           .select('id')
@@ -430,13 +440,15 @@ export default function Reports({ user }: ReportsProps) {
 
   const clearAllFilters = () => {
     setSelectedUserIds(user.role === 'employee' ? [user.id] : [])
-    setSelectedTeam('all')
+    // For non-admin users, keep their team selected; for admins, reset to 'all'
+    setSelectedTeam(user.role === 'admin' ? 'all' : (user.team || 'all'))
     setSelectedProject('all')
     setSelectedRole('all')
   }
 
+  // For non-admin users, team filter is always active (their team), so don't count it as an active filter
   const hasActiveFilters = selectedUserIds.length !== (user.role === 'employee' ? 1 : 0) || 
-                           selectedTeam !== 'all' || 
+                           (user.role === 'admin' && selectedTeam !== 'all') || 
                            selectedProject !== 'all' || 
                            selectedRole !== 'all'
 
@@ -646,8 +658,8 @@ export default function Reports({ user }: ReportsProps) {
             </div>
           )}
 
-          {/* Team Filter (for admins/managers) */}
-          {(user.role === 'admin' || user.role === 'manager' || user.role === 'hr') && teams.length > 0 && (
+          {/* Team Filter (only for admins) */}
+          {user.role === 'admin' && teams.length > 0 && (
             <div className="space-y-2">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
                 <span>Team/Department</span>
@@ -664,6 +676,18 @@ export default function Reports({ user }: ReportsProps) {
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+          
+          {/* Show team info for non-admin users (read-only) */}
+          {user.role !== 'admin' && user.team && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
+                <span>Team/Department</span>
+              </label>
+              <div className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm">
+                {user.team}
+              </div>
             </div>
           )}
 

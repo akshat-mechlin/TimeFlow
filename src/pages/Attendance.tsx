@@ -95,14 +95,14 @@ export default function Attendance({ user }: AttendanceProps) {
         const { data } = await supabase.from('profiles').select('*').order('full_name')
         setTeamMembers(data || [])
       } else if (user.role === 'manager' || user.role === 'hr') {
-        // Manager can see their team members
-        const { data: managed } = await supabase
-          .from('employee_managers')
-          .select('employee_id, profiles:profiles!employee_managers_employee_id_fkey(*)')
+        // Manager can see their team members - get all users who have this manager assigned
+        const { data: teamMembers } = await supabase
+          .from('profiles')
+          .select('*')
           .eq('manager_id', user.id)
+          .order('full_name')
 
-        const members = managed?.map((m: any) => m.profiles).filter(Boolean) || []
-        setTeamMembers([user, ...members])
+        setTeamMembers([user, ...(teamMembers || [])])
       } else {
         // Employee can only see themselves
         setTeamMembers([user])

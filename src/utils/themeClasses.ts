@@ -12,3 +12,4 @@ export const buttonPrimaryClass = "bg-gradient-to-r from-blue-500 to-purple-600 
 export const buttonSecondaryClass = "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
 
 
+

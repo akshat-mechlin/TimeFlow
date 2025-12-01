@@ -65,13 +65,13 @@ export default function TeamMembers({ user }: TeamMembersProps) {
         // Employees can only see themselves
         query = query.eq('id', user.id)
       } else if (user.role === 'manager' || user.role === 'hr') {
-        // Managers can see their team members
-        const { data: managed } = await supabase
-          .from('employee_managers')
-          .select('employee_id')
+        // Managers can see their team members - get all users who have this manager assigned
+        const { data: teamMembers } = await supabase
+          .from('profiles')
+          .select('id')
           .eq('manager_id', user.id)
 
-        const teamUserIds = [user.id, ...(managed?.map((m) => m.employee_id) || [])]
+        const teamUserIds = [user.id, ...(teamMembers?.map((m) => m.id) || [])]
         query = query.in('id', teamUserIds)
       }
       // Admins can see all (no filter)

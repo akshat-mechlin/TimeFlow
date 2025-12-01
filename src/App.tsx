@@ -452,7 +452,14 @@ function App() {
                         <Route path="/projects" element={<ProjectManagement user={user} />} />
                         <Route path="/team" element={<TeamMembers user={user} />} />
                         <Route path="/screenshots" element={<Screenshots user={user} />} />
-                        <Route path="/admin" element={<AdminPanel user={user} />} />
+                        <Route 
+                          path="/admin" 
+                          element={
+                            user.role === 'admin' 
+                              ? <AdminPanel user={user} /> 
+                              : <Navigate to="/" replace />
+                          } 
+                        />
                         <Route path="/download" element={<Download />} />
                         <Route path="/profile" element={<Profile user={user} />} />
                         <Route path="*" element={<Navigate to="/" replace />} />

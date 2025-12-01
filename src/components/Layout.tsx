@@ -49,7 +49,7 @@ export default function Layout({ children, user }: LayoutProps) {
     { icon: FolderKanban, label: 'Projects', path: '/projects' },
     { icon: Users, label: 'Team Members', path: '/team' },
     { icon: Image, label: 'Screenshots', path: '/screenshots' },
-    ...(user.role === 'admin' || user.role === 'hr' || user.role === 'manager'
+    ...(user.role === 'admin'
       ? [{ icon: Settings, label: 'Admin Panel', path: '/admin' }]
       : []),
     { icon: Download, label: 'Download App', path: '/download' },
