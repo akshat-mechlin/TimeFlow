@@ -9,7 +9,6 @@ import {
   Users,
   Settings,
   User,
-  Bell,
   Search,
   LogOut,
   Menu,
@@ -34,7 +33,6 @@ export default function Layout({ children, user }: LayoutProps) {
   const navigate = useNavigate()
   const { theme, toggleTheme } = useTheme()
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [notificationsOpen, setNotificationsOpen] = useState(false)
 
   const handleLogout = async () => {
     const { supabase } = await import('../lib/supabase')
@@ -187,17 +185,6 @@ export default function Layout({ children, user }: LayoutProps) {
                     )}
                   </AnimatePresence>
                   </motion.button>
-
-                {/* Notifications */}
-                <div className="relative">
-                  <button
-                    onClick={() => setNotificationsOpen(!notificationsOpen)}
-                    className="relative p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                  >
-                    <Bell className="w-5 h-5 text-gray-600 dark:text-gray-300" />
-                    <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-                  </button>
-                </div>
 
             {/* User Profile */}
             <div className="flex items-center space-x-3">

@@ -19,7 +19,7 @@ export default function Loader({ size = 'md', text = 'Loading...', fullScreen = 
 
   const containerClasses = fullScreen 
     ? 'flex items-center justify-center h-screen w-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900'
-    : 'flex items-center justify-center h-full min-h-[200px]'
+    : 'flex items-center justify-center h-full min-h-[200px] bg-transparent dark:bg-transparent'
 
   return (
     <div className={containerClasses}>
