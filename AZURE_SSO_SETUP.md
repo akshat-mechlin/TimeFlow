@@ -2,18 +2,18 @@
 
 ## Production Deployment
 
-**Production Domain:** `https://newtracker.mechlintech.com`
+**Production Domain:** `https://timeflow.mechlintech.com`
 
 ### Important Configuration Steps for Production:
 
 1. **Supabase Dashboard - Redirect URLs:**
    - Go to Supabase Dashboard > Authentication > URL Configuration
-   - Add: `https://newtracker.mechlintech.com/auth/callback`
+   - Add: `https://timeflow.mechlintech.com/auth/callback`
    - Keep: `http://localhost:5173/auth/callback` for local development
 
 2. **Azure App Registration - Redirect URI:**
    - The redirect URI in Azure should **always** point to Supabase: `https://<project-ref>.supabase.co/auth/v1/callback`
-   - **Do NOT** add your website domain (`newtracker.mechlintech.com`) as a redirect URI in Azure
+   - **Do NOT** add your website domain (`timeflow.mechlintech.com`) as a redirect URI in Azure
    - Supabase handles the OAuth flow and redirects to your website
 
 3. **Code Configuration:**
@@ -21,7 +21,7 @@
    - The website will work on any domain once deployed
 
 4. **Electron App Integration:**
-   - Update your Electron app to use: `https://newtracker.mechlintech.com?callback=<callback-url>`
+   - Update your Electron app to use: `https://timeflow.mechlintech.com?callback=<callback-url>`
    - For local development, continue using: `http://localhost:5173?callback=<callback-url>`
 
 ## Common Errors and Solutions
@@ -121,7 +121,7 @@ If you want to allow users from any Azure AD tenant to sign in:
 ### 4. Add Redirect URLs in Supabase
 - [ ] Go to Supabase Dashboard > Authentication > URL Configuration
 - [ ] Add redirect URL: `http://localhost:5173/auth/callback` (for local dev)
-- [ ] Add redirect URL: `https://newtracker.mechlintech.com/auth/callback` (for production)
+- [ ] Add redirect URL: `https://timeflow.mechlintech.com/auth/callback` (for production)
 
 ## Testing
 
@@ -153,7 +153,7 @@ This website supports integration with an Electron desktop application that uses
 ### How It Works
 
 1. **Electron App Initiates Login:**
-   - Electron app opens the system browser to: `https://newtracker.mechlintech.com?callback=<callback-url>` (production) or `http://localhost:5173?callback=<callback-url>` (local dev)
+   - Electron app opens the system browser to: `https://timeflow.mechlintech.com?callback=<callback-url>` (production) or `http://localhost:5173?callback=<callback-url>` (local dev)
    - The `callback` parameter can be:
      - Custom protocol URL: `tracker://callback`
      - HTTP URL: `http://localhost:5174/callback`
@@ -193,8 +193,8 @@ The website automatically:
 #### Option 1: Custom Protocol (tracker://)
 
 **For Production:**
-1. Deploy your website to `https://newtracker.mechlintech.com`
-2. From your Electron app, open: `https://newtracker.mechlintech.com?callback=tracker://callback`
+1. Deploy your website to `https://timeflow.mechlintech.com`
+2. From your Electron app, open: `https://timeflow.mechlintech.com?callback=tracker://callback`
 3. Click "Sign in with Microsoft"
 4. Complete the Azure authentication
 5. You should be redirected back to `tracker://callback?access_token=...&refresh_token=...`
@@ -209,9 +209,9 @@ The website automatically:
 #### Option 2: HTTP Callback (http://localhost:5174/callback)
 
 **For Production:**
-1. Deploy your website to `https://newtracker.mechlintech.com`
+1. Deploy your website to `https://timeflow.mechlintech.com`
 2. Start your Electron app's HTTP server on `http://localhost:5174`
-3. From your Electron app, open: `https://newtracker.mechlintech.com?callback=http://localhost:5174/callback`
+3. From your Electron app, open: `https://timeflow.mechlintech.com?callback=http://localhost:5174/callback`
 4. Click "Sign in with Microsoft"
 5. Complete the Azure authentication
 6. You should be redirected to `http://localhost:5174/callback?access_token=...&refresh_token=...`

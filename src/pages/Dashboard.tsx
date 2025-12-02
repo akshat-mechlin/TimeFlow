@@ -19,6 +19,7 @@ export default function Dashboard({ user }: DashboardProps) {
   const [totalHours, setTotalHours] = useState(0)
   const [activeProjects, setActiveProjects] = useState(0)
   const [teamOnline, setTeamOnline] = useState(0)
+  const [teamTotal, setTeamTotal] = useState(0)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -59,6 +60,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
       if (todayError) throw todayError
 
+      // Database stores duration in seconds, convert to hours
       const todayTotal = todayEntries?.reduce((sum, entry) => sum + (entry.duration || 0), 0) || 0
       setTodayHours(todayTotal / 3600) // Convert seconds to hours
 
@@ -70,6 +72,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
       if (allError) throw allError
 
+      // Database stores duration in seconds, convert to hours
       const total = allEntries?.reduce((sum, entry) => sum + (entry.duration || 0), 0) || 0
       setTotalHours(total / 3600)
 
@@ -84,13 +87,42 @@ export default function Dashboard({ user }: DashboardProps) {
 
       setActiveProjects(userProjects?.length || 0)
 
-      // Fetch team members count (approximate online count)
-      const { count: teamCount } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
+      // Fetch team members based on user role
+      let teamUserIds: string[] = []
+      
+      if (user.role === 'admin') {
+        // Admin can see all users
+        const { data: allUsers } = await supabase
+          .from('profiles')
+          .select('id')
+        teamUserIds = allUsers?.map(u => u.id) || []
+      } else if (user.role === 'manager' || user.role === 'hr') {
+        // Manager/HR can see their team members - users who have this manager assigned
+        const { data: teamMembers } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('manager_id', user.id)
+        teamUserIds = [user.id, ...(teamMembers?.map(m => m.id) || [])]
+      } else {
+        // Employee can only see themselves
+        teamUserIds = [user.id]
+      }
 
-      // For now, show total team members (you can enhance this with actual online status)
-      setTeamOnline(teamCount || 0)
+      setTeamTotal(teamUserIds.length)
+
+      // Count online users (users who have logged time today)
+      if (teamUserIds.length > 0) {
+        const { data: onlineUsers } = await supabase
+          .from('time_entries')
+          .select('user_id', { distinct: true })
+          .in('user_id', teamUserIds)
+          .gte('start_time', todayStart)
+          .lte('start_time', todayEnd)
+
+        setTeamOnline(onlineUsers?.length || 0)
+      } else {
+        setTeamOnline(0)
+      }
     } catch (error) {
       console.error('Error fetching dashboard data:', error)
     } finally {
@@ -189,7 +221,7 @@ export default function Dashboard({ user }: DashboardProps) {
             </div>
           </div>
           <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Team Online</h3>
-          <p className="text-3xl font-bold text-gray-800 dark:text-white">{teamOnline}/12</p>
+          <p className="text-3xl font-bold text-gray-800 dark:text-white">{teamOnline}/{teamTotal}</p>
         </motion.div>
       </div>
 

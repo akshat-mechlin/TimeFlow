@@ -12,7 +12,7 @@ export default defineConfig({
   base: './',
   server: {
     port: 5173,
-    allowedHosts:['newtracker.mechlintech.com'],
+    allowedHosts:['timeflow.mechlintech.com'],
   },
   build: {
     outDir: 'dist',
