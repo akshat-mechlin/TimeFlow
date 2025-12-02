@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Download as DownloadIcon, Monitor, Laptop, HardDrive, CheckCircle } from 'lucide-react'
+import { Download as DownloadIcon, Monitor, Laptop, CheckCircle } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../contexts/ToastContext'
 import Loader from '../components/Loader'
@@ -8,7 +8,6 @@ export default function Download() {
   const [downloadLinks, setDownloadLinks] = useState({
     windows: '',
     macos: '',
-    linux: '',
   })
   const [loading, setLoading] = useState(true)
   const { showError, showInfo } = useToast()
@@ -38,17 +37,10 @@ export default function Download() {
         'TimeFlow.dmg',
         'macos/timeflow.dmg',
       ]
-      const linuxFiles = [
-        'linux/TimeFlow.AppImage',
-        'linux/TimeFlow-x86_64.AppImage',
-        'TimeFlow.AppImage',
-        'linux/timeflow.AppImage',
-      ]
 
       let foundBucket = ''
       let foundWindows = ''
       let foundMacos = ''
-      let foundLinux = ''
 
       // Try each bucket
       for (const bucketName of possibleBuckets) {
@@ -137,37 +129,11 @@ export default function Download() {
             }
           }
 
-          // Find Linux file (.AppImage)
-          const linuxFile = allFiles.find(file => 
-            (file.toLowerCase().endsWith('.appimage') || file.toLowerCase().endsWith('.AppImage')) && 
-            (file.toLowerCase().includes('linux') || file.toLowerCase().includes('appimage') || !file.includes('/'))
-          )
-          if (linuxFile) {
-            const { data } = supabase.storage.from(bucketName).getPublicUrl(linuxFile)
-            if (data?.publicUrl) {
-              foundLinux = data.publicUrl
-            }
-          } else {
-            // Fallback to trying predefined paths
-            for (const filePath of linuxFiles) {
-              try {
-                const { data } = supabase.storage.from(bucketName).getPublicUrl(filePath)
-                if (data?.publicUrl) {
-                  foundLinux = data.publicUrl
-                  break
-                }
-              } catch (e) {
-                continue
-              }
-            }
-          }
-
           // If we found at least one file, use this bucket
-          if (foundWindows || foundMacos || foundLinux) {
+          if (foundWindows || foundMacos) {
             setDownloadLinks({
               windows: foundWindows,
               macos: foundMacos,
-              linux: foundLinux,
             })
             setLoading(false)
             return
@@ -183,7 +149,6 @@ export default function Download() {
       setDownloadLinks({
         windows: '',
         macos: '',
-        linux: '',
       })
       setLoading(false)
     } catch (error) {
@@ -193,14 +158,14 @@ export default function Download() {
     }
   }
 
-  const handleDownload = async (platform: 'windows' | 'macos' | 'linux', url: string) => {
+  const handleDownload = async (platform: 'windows' | 'macos', url: string) => {
     if (!url || url === '#') {
-      showError(`${platform === 'windows' ? 'Windows' : platform === 'macos' ? 'macOS' : 'Linux'} download is not yet available.`)
+      showError(`${platform === 'windows' ? 'Windows' : 'macOS'} download is not yet available.`)
       return
     }
 
     try {
-      showInfo(`Starting download for ${platform === 'windows' ? 'Windows' : platform === 'macos' ? 'macOS' : 'Linux'}...`)
+      showInfo(`Starting download for ${platform === 'windows' ? 'Windows' : 'macOS'}...`)
       
       // Create a temporary anchor element to trigger download
       const link = document.createElement('a')
@@ -235,12 +200,12 @@ export default function Download() {
       <div className="bg-blue-600 dark:bg-blue-500 text-white p-8 rounded-xl">
         <h1 className="text-4xl font-bold mb-2">Download TimeFlow Desktop App</h1>
         <p className="text-blue-100 text-lg">
-          Get the full-featured desktop application for Windows, macOS, and Linux
+          Get the full-featured desktop application for Windows and macOS
         </p>
       </div>
 
       {/* Download Options */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Windows */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:shadow-md transition-shadow">
           <div className="flex items-center justify-center w-16 h-16 bg-blue-100 rounded-xl mb-4 mx-auto">
@@ -280,26 +245,6 @@ export default function Download() {
           </button>
           <p className="text-xs text-gray-500 text-center mt-3">.dmg installer</p>
         </div>
-
-        {/* Linux */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-center w-16 h-16 bg-orange-100 rounded-xl mb-4 mx-auto">
-            <HardDrive className="w-8 h-8 text-orange-600" />
-          </div>
-          <h3 className="text-xl font-semibold text-gray-800 dark:text-white text-center mb-2">Linux</h3>
-          <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-6">
-            AppImage (64-bit)
-          </p>
-          <button
-            onClick={() => handleDownload('linux', downloadLinks.linux)}
-            disabled={!downloadLinks.linux}
-            className="w-full flex items-center justify-center space-x-2 bg-orange-600 dark:bg-orange-500 text-white px-6 py-3 rounded-lg hover:bg-orange-700 dark:hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <DownloadIcon className="w-5 h-5" />
-            <span>Download for Linux</span>
-          </button>
-          <p className="text-xs text-gray-500 text-center mt-3">.AppImage</p>
-        </div>
       </div>
 
       {/* Features */}
@@ -318,7 +263,7 @@ export default function Download() {
       {/* System Requirements */}
       <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-6">
         <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">System Requirements</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <h3 className="font-medium text-gray-800 dark:text-white mb-2">Windows</h3>
             <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
@@ -332,14 +277,6 @@ export default function Download() {
             <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
               <li>• macOS 10.15 or later</li>
               <li>• Intel or Apple Silicon</li>
-              <li>• 100 MB free disk space</li>
-            </ul>
-          </div>
-          <div>
-            <h3 className="font-medium text-gray-800 dark:text-white mb-2">Linux</h3>
-            <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
-              <li>• Ubuntu 18.04+ or similar</li>
-              <li>• 64-bit processor</li>
               <li>• 100 MB free disk space</li>
             </ul>
           </div>
