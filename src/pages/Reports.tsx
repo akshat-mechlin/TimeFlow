@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { Calendar, Download, Filter, X, RefreshCw } from 'lucide-react'
+import { Calendar, Download, Filter, X, RefreshCw, Search } from 'lucide-react'
 import Loader from '../components/Loader'
 import {
   Chart as ChartJS,
@@ -61,6 +61,7 @@ export default function Reports({ user }: ReportsProps) {
   const [selectedProject, setSelectedProject] = useState<string>('all')
   const [selectedRole, setSelectedRole] = useState<string>('all')
   const [showUserDropdown, setShowUserDropdown] = useState(false)
+  const [userSearchTerm, setUserSearchTerm] = useState('')
   const [teamMembers, setTeamMembers] = useState<Profile[]>([])
   const [teams, setTeams] = useState<string[]>([])
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([])
@@ -80,6 +81,7 @@ export default function Reports({ user }: ReportsProps) {
     const handleClickOutside = (event: MouseEvent) => {
       if (userDropdownRef.current && !userDropdownRef.current.contains(event.target as Node)) {
         setShowUserDropdown(false)
+        setUserSearchTerm('')
       }
     }
 
@@ -611,7 +613,12 @@ export default function Reports({ user }: ReportsProps) {
               </label>
               <div className="relative" ref={userDropdownRef}>
                 <button
-                  onClick={() => setShowUserDropdown(!showUserDropdown)}
+                  onClick={() => {
+                    setShowUserDropdown(!showUserDropdown)
+                    if (showUserDropdown) {
+                      setUserSearchTerm('')
+                    }
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm text-left flex items-center justify-between focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <span className="truncate">
@@ -625,19 +632,55 @@ export default function Reports({ user }: ReportsProps) {
                 </button>
                 {showUserDropdown && (
                   <div className="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                    {/* Search Bar */}
+                    <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-2">
+                      <div className="relative">
+                        <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        <input
+                          type="text"
+                          placeholder="Search users..."
+                          value={userSearchTerm}
+                          onChange={(e) => setUserSearchTerm(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                        />
+                      </div>
+                    </div>
                     <div className="p-2 border-b border-gray-200 dark:border-gray-700">
                       <label className="flex items-center space-x-2 px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer">
                         <input
                           type="checkbox"
-                          checked={selectedUserIds.length === teamMembers.length && teamMembers.length > 0}
-                          onChange={handleSelectAllUsers}
+                          checked={(() => {
+                            const filtered = teamMembers.filter(m => 
+                              m.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                              m.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
+                            )
+                            return filtered.length > 0 && filtered.every(m => selectedUserIds.includes(m.id))
+                          })()}
+                          onChange={(e) => {
+                            const filtered = teamMembers.filter(m => 
+                              m.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                              m.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
+                            )
+                            if (e.target.checked) {
+                              const newIds = [...new Set([...selectedUserIds, ...filtered.map(m => m.id)])]
+                              setSelectedUserIds(newIds)
+                            } else {
+                              setSelectedUserIds(selectedUserIds.filter(id => !filtered.some(m => m.id === id)))
+                            }
+                          }}
                           className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
                         />
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Select All</span>
                       </label>
                     </div>
                     <div className="p-2 space-y-1">
-                      {teamMembers.map((member) => (
+                      {teamMembers
+                        .filter(member => 
+                          member.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                          member.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
+                        )
+                        .map((member) => (
                         <label
                           key={member.id}
                           className="flex items-center space-x-2 px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded cursor-pointer"

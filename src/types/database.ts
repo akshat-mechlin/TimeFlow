@@ -329,10 +329,12 @@ export type Database = {
         Row: {
           client_id: string | null
           created_at: string | null
+          created_by: string | null
           deadline: string | null
           description: string | null
           id: string
           name: string
+          project_managers: string[] | null
           status: string
           total_hours: number | null
           updated_at: string | null
@@ -340,10 +342,12 @@ export type Database = {
         Insert: {
           client_id?: string | null
           created_at?: string | null
+          created_by?: string | null
           deadline?: string | null
           description?: string | null
           id?: string
           name: string
+          project_managers?: string[] | null
           status?: string
           total_hours?: number | null
           updated_at?: string | null
@@ -351,10 +355,12 @@ export type Database = {
         Update: {
           client_id?: string | null
           created_at?: string | null
+          created_by?: string | null
           deadline?: string | null
           description?: string | null
           id?: string
           name?: string
+          project_managers?: string[] | null
           status?: string
           total_hours?: number | null
           updated_at?: string | null

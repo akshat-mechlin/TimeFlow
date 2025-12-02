@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, hrmsSupabase } from '../lib/supabase'
 import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw } from 'lucide-react'
 import { format, parseISO, subDays, subHours, addHours } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
@@ -19,7 +19,7 @@ interface AttendanceRecord {
   date: string // Date in IST (YYYY-MM-DD format)
   clock_in_time: string | null
   clock_out_time: string | null
-  status: 'present' | 'half_day' | 'late' | 'absent'
+  status: 'present' | 'half_day' | 'late' | 'absent' | 'on_leave'
   duration: number // in seconds
   profile?: Profile
   timeEntries?: Array<{
@@ -50,6 +50,7 @@ export default function Attendance({ user }: AttendanceProps) {
   const [activeDateRange, setActiveDateRange] = useState<'today' | 'last7' | 'last30' | 'custom'>('today')
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [teamMembers, setTeamMembers] = useState<Profile[]>([])
+  const [userSearchTerm, setUserSearchTerm] = useState('')
   const [loading, setLoading] = useState(true)
   const selectedUserIdsRef = useRef<string[]>(selectedUserIds)
   const userDropdownRef = useRef<HTMLDivElement>(null)
@@ -209,17 +210,18 @@ export default function Attendance({ user }: AttendanceProps) {
 
       // IMPORTANT: Always use currentSelectedUserIds from ref to ensure we use the latest state
       // If filtering by specific users, only include those users
-      // If no users selected (empty array) AND user has permission, show all users from time entries
+      // If no users selected (empty array) AND user has permission, show all team members
       // Otherwise, only show the selected users
       let usersToProcess: string[]
       if (currentSelectedUserIds.length > 0) {
         // Filter by selected users only
         usersToProcess = currentSelectedUserIds
       } else {
-        // No users selected - show all users found in time entries
-        // But only if user has permission to see all users
+        // No users selected - show all team members (not just those with time entries)
+        // This ensures leave status can be shown for all visible users
         if (user.role === 'admin' || user.role === 'manager' || user.role === 'hr') {
-          usersToProcess = Array.from(userIds)
+          // Include all team members, not just those with time entries
+          usersToProcess = teamMembers.map(m => m.id)
         } else {
           // Employee can only see themselves
           usersToProcess = [user.id]
@@ -357,9 +359,190 @@ export default function Attendance({ user }: AttendanceProps) {
       }
 
       // Convert map to array and sort by date (descending)
-      const attendanceRecords = Array.from(attendanceMap.values()).sort((a, b) => {
+      let attendanceRecords = Array.from(attendanceMap.values()).sort((a, b) => {
         return new Date(b.date).getTime() - new Date(a.date).getTime()
       })
+
+      // Fetch approved leave applications from HRMS database
+      try {
+        // Get all user emails from both attendance records and team members
+        // This ensures we fetch leave data for all visible users, not just those with time entries
+        const userEmails = new Set<string>()
+        
+        // Add emails from attendance records
+        attendanceRecords.forEach(record => {
+          if (record.profile?.email) {
+            userEmails.add(record.profile.email.toLowerCase())
+          }
+        })
+        
+        // Add emails from team members (all users the current user can see)
+        teamMembers.forEach(member => {
+          if (member.email) {
+            userEmails.add(member.email.toLowerCase())
+          }
+        })
+
+        if (userEmails.size > 0) {
+          // Fetch users from HRMS by email (case-insensitive comparison)
+          const { data: hrmsUsers } = await hrmsSupabase
+            .from('users')
+            .select('id, email')
+            .in('email', Array.from(userEmails))
+
+          // Also try case-insensitive matching by fetching all users and matching manually
+          // This handles cases where email casing might differ
+          const { data: allHrmsUsers } = await hrmsSupabase
+            .from('users')
+            .select('id, email')
+
+          // Create case-insensitive email mapping
+          const hrmsUsersMap = new Map<string, { id: string; email: string }>()
+          if (allHrmsUsers) {
+            allHrmsUsers.forEach(hrmsUser => {
+              if (hrmsUser.email) {
+                const emailLower = hrmsUser.email.toLowerCase()
+                // Check if this email matches any of our user emails
+                if (userEmails.has(emailLower)) {
+                  hrmsUsersMap.set(emailLower, hrmsUser)
+                }
+              }
+            })
+          }
+
+          if (hrmsUsersMap.size > 0) {
+            // Create email to HRMS user_id mapping
+            const emailToHrmsUserId = new Map<string, string>()
+            const hrmsUserIds = new Set<string>()
+            hrmsUsersMap.forEach((hrmsUser, emailLower) => {
+              if (hrmsUser.id) {
+                emailToHrmsUserId.set(emailLower, hrmsUser.id)
+                hrmsUserIds.add(hrmsUser.id)
+              }
+            })
+
+            // Fetch approved leave applications for the date range and matching users
+            const { data: leaveApplications } = await hrmsSupabase
+              .from('leave_applications')
+              .select('user_id, start_date, end_date, status')
+              .eq('status', 'approved')
+              .in('user_id', Array.from(hrmsUserIds))
+              .lte('start_date', endDate)
+              .gte('end_date', startDate)
+
+            if (leaveApplications && leaveApplications.length > 0) {
+              console.log('Found leave applications:', leaveApplications.length)
+              
+              // Create a case-insensitive map of email -> tracker user_id for quick lookup
+              const emailToTrackerUserId = new Map<string, string>()
+              teamMembers.forEach(member => {
+                if (member.email && member.id) {
+                  emailToTrackerUserId.set(member.email.toLowerCase(), member.id)
+                }
+              })
+              
+              // Also add from attendance records (in case profile is missing from teamMembers)
+              attendanceRecords.forEach(record => {
+                if (record.profile?.email && record.user_id) {
+                  emailToTrackerUserId.set(record.profile.email.toLowerCase(), record.user_id)
+                }
+              })
+
+              console.log('Email mappings - Team members:', Array.from(emailToTrackerUserId.keys()))
+              console.log('HRMS users found:', Array.from(hrmsUsersMap.keys()))
+
+              // Create a map of user_id -> dates on leave
+              const userLeaveDates = new Map<string, Set<string>>()
+
+              leaveApplications.forEach(leave => {
+                const hrmsUserId = leave.user_id
+                // Find the HRMS user by ID
+                const hrmsUser = Array.from(hrmsUsersMap.values()).find(u => u.id === hrmsUserId)
+                
+                if (hrmsUser && hrmsUser.email) {
+                  // Find the tracker user_id by matching email (case-insensitive)
+                  const trackerUserId = emailToTrackerUserId.get(hrmsUser.email.toLowerCase())
+                  
+                  if (trackerUserId) {
+                    console.log(`Matched leave for ${hrmsUser.email} -> tracker user ${trackerUserId}, dates: ${leave.start_date} to ${leave.end_date}`)
+                    
+                    // Generate all dates in the leave range
+                    const leaveStart = parseISO(leave.start_date)
+                    const leaveEnd = parseISO(leave.end_date)
+                    const currentLeaveDate = new Date(leaveStart)
+
+                    while (currentLeaveDate <= leaveEnd) {
+                      const dateStr = format(currentLeaveDate, 'yyyy-MM-dd')
+                      
+                      // Only include dates within the selected date range
+                      if (dateStr >= startDate && dateStr <= endDate) {
+                        if (!userLeaveDates.has(trackerUserId)) {
+                          userLeaveDates.set(trackerUserId, new Set())
+                        }
+                        userLeaveDates.get(trackerUserId)!.add(dateStr)
+                      }
+
+                      currentLeaveDate.setDate(currentLeaveDate.getDate() + 1)
+                    }
+                  } else {
+                    console.warn(`Could not match HRMS user ${hrmsUser.email} to any tracker user`)
+                  }
+                }
+              })
+
+              console.log('User leave dates mapped:', Array.from(userLeaveDates.entries()).map(([id, dates]) => ({ userId: id, dates: Array.from(dates) })))
+
+              // Update existing attendance records to show "on_leave" status
+              attendanceRecords = attendanceRecords.map(record => {
+                const leaveDates = userLeaveDates.get(record.user_id)
+                if (leaveDates && leaveDates.has(record.date)) {
+                  return {
+                    ...record,
+                    status: 'on_leave' as const,
+                  }
+                }
+                return record
+              })
+
+              // Create attendance records for leave dates that don't have time entries
+              // This ensures users on leave show up even if they have no time entries
+              userLeaveDates.forEach((leaveDateSet, trackerUserId) => {
+                const userProfile = teamMembers.find(m => m.id === trackerUserId)
+                if (userProfile) {
+                  leaveDateSet.forEach(dateStr => {
+                    // Check if record already exists
+                    const existingRecord = attendanceRecords.find(
+                      r => r.user_id === trackerUserId && r.date === dateStr
+                    )
+                    
+                    if (!existingRecord) {
+                      // Create a new attendance record for this leave date
+                      attendanceRecords.push({
+                        id: `${trackerUserId}-${dateStr}`,
+                        user_id: trackerUserId,
+                        date: dateStr,
+                        clock_in_time: null,
+                        clock_out_time: null,
+                        status: 'on_leave',
+                        duration: 0,
+                        profile: userProfile,
+                      })
+                    }
+                  })
+                }
+              })
+
+              // Re-sort attendance records after adding leave records
+              attendanceRecords = attendanceRecords.sort((a, b) => {
+                return new Date(b.date).getTime() - new Date(a.date).getTime()
+              })
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching leave applications from HRMS:', error)
+        // Continue with attendance records even if leave fetch fails
+      }
 
       console.log('Calculated attendance records:', attendanceRecords.length)
       setRecords(attendanceRecords)
@@ -378,10 +561,22 @@ export default function Attendance({ user }: AttendanceProps) {
     return `${hours}h ${minutes}m`
   }
 
-  const filteredRecords = records.filter((record) =>
-    record.profile?.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    record.profile?.team?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  const filteredRecords = records.filter((record) => {
+    // Filter by selected users first
+    if (selectedUserIds.length > 0 && !selectedUserIds.includes(record.user_id)) {
+      return false
+    }
+    
+    // Then filter by search term
+    if (searchTerm) {
+      const matchesSearch = 
+        record.profile?.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        record.profile?.team?.toLowerCase().includes(searchTerm.toLowerCase())
+      return matchesSearch
+    }
+    
+    return true
+  })
 
   const handleExportCSV = () => {
     // Create CSV headers
@@ -494,7 +689,12 @@ export default function Attendance({ user }: AttendanceProps) {
             <div className="relative z-[100]">
               <button
                 type="button"
-                onClick={() => setShowUserDropdown(!showUserDropdown)}
+                onClick={() => {
+                  setShowUserDropdown(!showUserDropdown)
+                  if (showUserDropdown) {
+                    setUserSearchTerm('')
+                  }
+                }}
                 className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 min-w-[200px] text-left bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-600 flex items-center justify-between transition-colors"
               >
                 <span className="text-sm">
@@ -518,34 +718,64 @@ export default function Attendance({ user }: AttendanceProps) {
                 <>
                   <div
                     className="fixed inset-0 z-[90]"
-                    onClick={() => setShowUserDropdown(false)}
+                    onClick={() => {
+                      setShowUserDropdown(false)
+                      setUserSearchTerm('')
+                    }}
                   ></div>
                   <div 
                     className="absolute z-[100] mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-h-60 overflow-y-auto"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {/* Select All Option */}
-                    {(user.role === 'admin' || user.role === 'manager' || user.role === 'hr') && (
-                      <label className="flex items-center space-x-2 p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded cursor-pointer border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800">
+                    {/* Search Bar */}
+                    <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-2">
+                      <div className="relative">
+                        <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                         <input
-                          type="checkbox"
-                          checked={teamMembers.length > 0 && selectedUserIds.length === teamMembers.length}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedUserIds(teamMembers.map(m => m.id))
-                            } else {
-                              setSelectedUserIds([])
-                            }
-                          }}
-                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          type="text"
+                          placeholder="Search users..."
+                          value={userSearchTerm}
+                          onChange={(e) => setUserSearchTerm(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
                         />
-                        <span className="text-sm font-semibold text-blue-700 dark:text-blue-400">Select All</span>
-                        <span className="text-xs text-gray-500">({teamMembers.length} members)</span>
-                      </label>
-                    )}
+                      </div>
+                    </div>
+                    
+                    {/* Select All Option */}
+                    {(user.role === 'admin' || user.role === 'manager' || user.role === 'hr') && (() => {
+                      const filteredMembers = teamMembers.filter(m => 
+                        m.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                        m.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
+                      )
+                      return (
+                        <label className="flex items-center space-x-2 p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded cursor-pointer border-b border-gray-200 dark:border-gray-700 sticky top-[50px] bg-white dark:bg-gray-800">
+                          <input
+                            type="checkbox"
+                            checked={filteredMembers.length > 0 && filteredMembers.every(m => selectedUserIds.includes(m.id))}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                const newIds = [...new Set([...selectedUserIds, ...filteredMembers.map(m => m.id)])]
+                                setSelectedUserIds(newIds)
+                              } else {
+                                setSelectedUserIds(selectedUserIds.filter(id => !filteredMembers.some(m => m.id === id)))
+                              }
+                            }}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm font-semibold text-blue-700 dark:text-blue-400">Select All</span>
+                          <span className="text-xs text-gray-500">({filteredMembers.length} members)</span>
+                        </label>
+                      )
+                    })()}
                     
                     {/* Individual Members */}
-                    {teamMembers.map((member) => (
+                    {teamMembers
+                      .filter(member => 
+                        member.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                        member.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
+                      )
+                      .map((member) => (
                       <label
                         key={member.id}
                         className="flex items-center space-x-2 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded cursor-pointer"
@@ -859,6 +1089,11 @@ export default function Attendance({ user }: AttendanceProps) {
                           <span className="inline-flex items-center space-x-1 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-400 rounded-full text-sm font-medium">
                             <Clock className="w-4 h-4" />
                             <span>Half Day</span>
+                          </span>
+                        ) : record.status === 'on_leave' ? (
+                          <span className="inline-flex items-center space-x-1 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-400 rounded-full text-sm font-medium">
+                            <Calendar className="w-4 h-4" />
+                            <span>On Leave</span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center space-x-1 px-3 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded-full text-sm font-medium">

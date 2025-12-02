@@ -19,3 +19,16 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   },
 })
 
+// HRMS Supabase client for leave management
+const hrmsSupabaseUrl = 
+  import.meta.env.VITE_HRMS_SUPABASE_URL || 
+  import.meta.env.NEXT_PUBLIC_HRMS_SUPABASE_URL || 
+  'https://gfencmpeybxarrnmermr.supabase.co'
+
+const hrmsSupabaseAnonKey = 
+  import.meta.env.VITE_HRMS_SUPABASE_ANON_KEY || 
+  import.meta.env.NEXT_PUBLIC_HRMS_SUPABASE_ANON_KEY || 
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmZW5jbXBleWJ4YXJybm1lcm1yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcwMDY2MTgsImV4cCI6MjA3MjU4MjYxOH0.3hKb1ijaCUn0HU4LbuuvlPGqUyKQuHUwYTmxonWYqMY'
+
+export const hrmsSupabase = createClient(hrmsSupabaseUrl, hrmsSupabaseAnonKey)
+

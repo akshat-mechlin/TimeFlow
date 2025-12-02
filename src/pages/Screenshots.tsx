@@ -48,6 +48,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
   const [typeFilter, setTypeFilter] = useState<'all' | 'screenshot' | 'camera'>('all')
   const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
   const [selectedUserId, setSelectedUserId] = useState<string>(user.id)
+  const [showUserDropdown, setShowUserDropdown] = useState(false)
+  const [userSearchTerm, setUserSearchTerm] = useState('')
   const [selectedScreenshot, setSelectedScreenshot] = useState<ScreenshotWithDetails | null>(null)
   const [teamMembers, setTeamMembers] = useState<Profile[]>([])
   const [imageUrls, setImageUrls] = useState<{ [key: string]: string }>({})
@@ -57,10 +59,29 @@ export default function Screenshots({ user }: ScreenshotsProps) {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const imageRef = useRef<HTMLImageElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const userDropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchTeamMembers()
   }, [user.id])
+
+  useEffect(() => {
+    // Close dropdown when clicking outside
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target as Node)) {
+        setShowUserDropdown(false)
+        setUserSearchTerm('')
+      }
+    }
+
+    if (showUserDropdown) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showUserDropdown])
 
   useEffect(() => {
     fetchScreenshots()
@@ -395,20 +416,100 @@ export default function Screenshots({ user }: ScreenshotsProps) {
         </div>
 
         <div className="flex items-center space-x-4 flex-wrap">
-          {/* User Filter - Show team member names */}
-          <div className="flex items-center space-x-2">
+          {/* User Filter - Custom dropdown with search */}
+          <div className="flex items-center space-x-2 relative" ref={userDropdownRef}>
             <User className="w-4 h-4 text-gray-500" />
-            <select
-              value={selectedUserId}
-              onChange={(e) => setSelectedUserId(e.target.value)}
-              className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[200px] bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-            >
-              {teamMembers.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.full_name} {member.id === user.id ? '(Me)' : ''}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUserDropdown(!showUserDropdown)
+                  if (showUserDropdown) {
+                    setUserSearchTerm('')
+                  }
+                }}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[200px] text-left bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-600 flex items-center justify-between transition-colors"
+              >
+                <span className="text-sm">
+                  {teamMembers.find(m => m.id === selectedUserId)?.full_name || 'Select User'}
+                  {selectedUserId === user.id && ' (Me)'}
+                </span>
+                <svg
+                  className={`w-4 h-4 text-gray-500 transition-transform ${showUserDropdown ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              
+              {showUserDropdown && (
+                <>
+                  <div
+                    className="fixed inset-0 z-[90]"
+                    onClick={() => {
+                      setShowUserDropdown(false)
+                      setUserSearchTerm('')
+                    }}
+                  ></div>
+                  <div 
+                    className="absolute z-[100] mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Search Bar */}
+                    <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-2">
+                      <div className="relative">
+                        <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        <input
+                          type="text"
+                          placeholder="Search users..."
+                          value={userSearchTerm}
+                          onChange={(e) => setUserSearchTerm(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                        />
+                      </div>
+                    </div>
+                    
+                    {/* User List */}
+                    <div className="p-1">
+                      {teamMembers
+                        .filter(member => 
+                          member.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                          member.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
+                        )
+                        .map((member) => (
+                          <button
+                            key={member.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedUserId(member.id)
+                              setShowUserDropdown(false)
+                              setUserSearchTerm('')
+                            }}
+                            className={`w-full text-left px-3 py-2 text-sm rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
+                              selectedUserId === member.id 
+                                ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' 
+                                : 'text-gray-700 dark:text-gray-300'
+                            }`}
+                          >
+                            {member.full_name} {member.id === user.id ? '(Me)' : ''}
+                          </button>
+                        ))}
+                      {teamMembers.filter(member => 
+                        member.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                        member.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
+                      ).length === 0 && (
+                        <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400 text-center">
+                          No users found
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Type Filter */}

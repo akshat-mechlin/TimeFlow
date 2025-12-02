@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { Search, Filter, Plus, Edit, Eye, Clock, Users, X, Check, UserPlus, ArrowLeft } from 'lucide-react'
+import { Search, Filter, Plus, Edit, Eye, Clock, Users, X, Check, UserPlus, ArrowLeft, Trash2 } from 'lucide-react'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
 import type { Tables } from '../types/database'
@@ -17,6 +17,7 @@ interface ProjectWithDetails extends Project {
   members?: Array<{ profile: Profile; id: string }>
   hours_spent?: number
   created_by_profile?: Profile
+  project_manager_profiles?: Profile[]
   member_hours?: Array<{ user_id: string; user_name: string; hours: number }>
 }
 
@@ -39,14 +40,39 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
     description: '',
     status: 'pending' as const,
     task_id: '',
+    selectedProjectManagers: [] as string[],
     selectedMembers: [] as string[],
   })
+  const [memberSearchTerm, setMemberSearchTerm] = useState('')
+  const [managerSearchTerm, setManagerSearchTerm] = useState('')
+  const [showManagerDropdown, setShowManagerDropdown] = useState(false)
+  const managerDropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchProjects()
     fetchTasks()
     fetchAllUsers()
-    
+  }, [])
+
+  useEffect(() => {
+    // Close manager dropdown when clicking outside
+    const handleClickOutside = (event: MouseEvent) => {
+      if (managerDropdownRef.current && !managerDropdownRef.current.contains(event.target as Node)) {
+        setShowManagerDropdown(false)
+        setManagerSearchTerm('')
+      }
+    }
+
+    if (showManagerDropdown) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showManagerDropdown])
+  
+  useEffect(() => {
     // Set up real-time subscriptions for projects and project members
     const projectsChannel = supabase
       .channel('projects-realtime')
@@ -130,7 +156,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
         const projectIds = new Set(memberProjects?.map(p => p.project_id) || [])
         filteredData = filteredData.filter(p => projectIds.has(p.id))
       } else if (user.role === 'manager') {
-        // Managers see projects they created or where they're assigned
+        // Managers see projects they created, where they're project manager, or where they're assigned
         const { data: memberProjects } = await supabase
           .from('project_members')
           .select('project_id')
@@ -138,7 +164,9 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
         
         const projectIds = new Set(memberProjects?.map(p => p.project_id) || [])
         filteredData = filteredData.filter(p => 
-          p.created_by === user.id || projectIds.has(p.id)
+          p.created_by === user.id || 
+          (p.project_managers && Array.isArray(p.project_managers) && p.project_managers.includes(user.id)) ||
+          projectIds.has(p.id)
         )
       }
       // Admin sees all projects (no filter)
@@ -206,11 +234,18 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
           console.log(`Project ${project.name} - Raw members:`, rawMembers)
           console.log(`Project ${project.name} - Normalized members count:`, members.length)
 
+          // Fetch project manager profiles
+          const projectManagerIds = (project.project_managers || []) as string[]
+          const projectManagerProfiles = projectManagerIds.length > 0
+            ? allUsers.filter(u => projectManagerIds.includes(u.id))
+            : []
+
           return {
             ...project,
             members: members,
             hours_spent: Math.round(totalHoursSpent * 10) / 10,
             member_hours: memberHours,
+            project_manager_profiles: projectManagerProfiles,
           }
         })
       )
@@ -259,6 +294,12 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
   const handleSave = async () => {
     try {
       if (editingProject) {
+        // Check if user can manage team members for this project
+        if (!canManageTeamMembers(editingProject)) {
+          showError('You do not have permission to manage team members for this project')
+          return
+        }
+
         // Update project
         const { error: projectError } = await supabase
           .from('projects')
@@ -267,6 +308,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
             description: formData.description,
             status: formData.status,
             task_id: formData.task_id || null,
+            project_managers: formData.selectedProjectManagers.length > 0 ? formData.selectedProjectManagers : null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', editingProject.id)
@@ -342,6 +384,11 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
         }
       } else {
         // Create new project
+        // Default project_managers to creator if not specified
+        const projectManagers = formData.selectedProjectManagers.length > 0 
+          ? formData.selectedProjectManagers 
+          : [user.id] // Default to creator if no managers selected
+        
         const { data: newProject, error: projectError } = await supabase
           .from('projects')
           .insert({
@@ -350,6 +397,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
             status: formData.status,
             task_id: formData.task_id || null,
             created_by: user.id,
+            project_managers: projectManagers,
           })
           .select()
           .single()
@@ -387,11 +435,13 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
 
       setShowModal(false)
       setEditingProject(null)
+      setMemberSearchTerm('')
       setFormData({
         name: '',
         description: '',
         status: 'pending',
         task_id: '',
+        selectedProjectManagers: [],
         selectedMembers: [],
       })
       setShowNewTaskInput(false)
@@ -426,10 +476,12 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       description: project.description || '',
       status: project.status as any,
       task_id: (project as any).task_id || '',
+      selectedProjectManagers: (project.project_managers || []) as string[],
       selectedMembers: memberIds,
     })
     setShowNewTaskInput(false)
     setNewTaskName('')
+    setMemberSearchTerm('')
     setShowModal(true)
   }
 
@@ -472,8 +524,6 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this project?')) return
-
     try {
       // Delete project members first
       await supabase.from('project_members').delete().eq('project_id', id)
@@ -490,13 +540,26 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
 
   const canEditProject = (project: ProjectWithDetails) => {
     if (user.role === 'admin') return true
-    if (user.role === 'manager' && project.created_by === user.id) return true
+    // Project owner (creator) can edit
+    if (project.created_by === user.id) return true
+    // Any project manager can edit
+    if (project.project_managers && Array.isArray(project.project_managers) && project.project_managers.includes(user.id)) return true
+    return false
+  }
+
+  const canManageTeamMembers = (project: ProjectWithDetails) => {
+    if (user.role === 'admin') return true
+    // Project owner (creator) can manage team members
+    if (project.created_by === user.id) return true
+    // Any project manager can manage team members
+    if (project.project_managers && Array.isArray(project.project_managers) && project.project_managers.includes(user.id)) return true
     return false
   }
 
   const canViewAllData = (project: ProjectWithDetails) => {
     if (user.role === 'admin') return true
-    if (user.role === 'manager' && project.created_by === user.id) return true
+    if (project.created_by === user.id) return true
+    if (project.project_managers && Array.isArray(project.project_managers) && project.project_managers.includes(user.id)) return true
     return false
   }
 
@@ -542,10 +605,14 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                 description: '',
                 status: 'pending',
                 task_id: '',
+                selectedProjectManagers: [],
                 selectedMembers: [],
               })
               setShowNewTaskInput(false)
               setNewTaskName('')
+              setMemberSearchTerm('')
+              setManagerSearchTerm('')
+              setShowManagerDropdown(false)
               setShowModal(true)
             }}
             className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white px-4 py-2 rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all"
@@ -649,6 +716,24 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                   </p>
                 </div>
 
+                {/* Project Managers */}
+                {project.project_manager_profiles && project.project_manager_profiles.length > 0 && (
+                  <div className="flex items-start space-x-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <UserPlus className="w-4 h-4 mt-0.5" />
+                    <div className="flex-1">
+                      <span className="text-xs font-medium">Manager{project.project_manager_profiles.length > 1 ? 's' : ''}: </span>
+                      <span className="text-xs">
+                        {project.project_manager_profiles.map((pm, idx) => (
+                          <span key={pm.id}>
+                            {pm.full_name}
+                            {idx < project.project_manager_profiles!.length - 1 && ', '}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                
                 {/* Team Members */}
                 <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
                   <Users className="w-4 h-4" />
@@ -662,7 +747,8 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                   {canEditProject(project) && (
                     <button
                       onClick={() => handleEdit(project)}
-                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
+                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors text-gray-700 dark:text-gray-300 font-medium"
+                      title="Edit Project"
                     >
                       <Edit className="w-4 h-4" />
                       <span>Edit</span>
@@ -691,7 +777,12 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                 {editingProject ? 'Edit Project' : 'Add Project'}
               </h2>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => {
+                  setShowModal(false)
+                  setEditingProject(null)
+                  setMemberSearchTerm('')
+                  setManagerSearchTerm('')
+                }}
                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300"
               >
                 <X className="w-5 h-5" />
@@ -792,40 +883,225 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                 </div>
               </div>
 
+              {/* Project Managers Selection - Multi-select with search */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Project Managers
+                  <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">
+                    ({!editingProject && 'Default: You - Project Creator'})
+                  </span>
+                </label>
+                <div className="relative" ref={managerDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowManagerDropdown(!showManagerDropdown)
+                      if (showManagerDropdown) {
+                        setManagerSearchTerm('')
+                      }
+                    }}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-left flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                  >
+                    <span className="text-sm">
+                      {formData.selectedProjectManagers.length === 0
+                        ? (!editingProject ? 'You (Project Creator) - Default' : 'Select Project Managers')
+                        : formData.selectedProjectManagers.length === 1
+                        ? allUsers.find(u => u.id === formData.selectedProjectManagers[0])?.full_name || '1 manager selected'
+                        : `${formData.selectedProjectManagers.length} managers selected`}
+                    </span>
+                    <svg
+                      className={`w-4 h-4 text-gray-500 transition-transform ${showManagerDropdown ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  
+                  {showManagerDropdown && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-[90]"
+                        onClick={() => {
+                          setShowManagerDropdown(false)
+                          setManagerSearchTerm('')
+                        }}
+                      ></div>
+                      <div 
+                        className="absolute z-[100] mt-1 w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Search Bar */}
+                        <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-2">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                            <input
+                              type="text"
+                              placeholder="Search managers..."
+                              value={managerSearchTerm}
+                              onChange={(e) => setManagerSearchTerm(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                            />
+                          </div>
+                        </div>
+                        
+                        {/* Select All Option */}
+                        {(() => {
+                          const filteredManagers = allUsers.filter(m => 
+                            m.full_name?.toLowerCase().includes(managerSearchTerm.toLowerCase()) ||
+                            m.email?.toLowerCase().includes(managerSearchTerm.toLowerCase())
+                          )
+                          return (
+                            <label className="flex items-center space-x-2 p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded cursor-pointer border-b border-gray-200 dark:border-gray-700 sticky top-[50px] bg-white dark:bg-gray-800">
+                              <input
+                                type="checkbox"
+                                checked={filteredManagers.length > 0 && filteredManagers.every(m => formData.selectedProjectManagers.includes(m.id))}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    const newIds = [...new Set([...formData.selectedProjectManagers, ...filteredManagers.map(m => m.id)])]
+                                    setFormData({ ...formData, selectedProjectManagers: newIds })
+                                  } else {
+                                    setFormData({ 
+                                      ...formData, 
+                                      selectedProjectManagers: formData.selectedProjectManagers.filter(id => !filteredManagers.some(m => m.id === id))
+                                    })
+                                  }
+                                }}
+                                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                              />
+                              <span className="text-sm font-semibold text-blue-700 dark:text-blue-400">Select All</span>
+                              <span className="text-xs text-gray-500">({filteredManagers.length} managers)</span>
+                            </label>
+                          )
+                        })()}
+                        
+                        {/* Manager List */}
+                        <div className="p-1">
+                          {allUsers
+                            .filter(manager => 
+                              manager.full_name?.toLowerCase().includes(managerSearchTerm.toLowerCase()) ||
+                              manager.email?.toLowerCase().includes(managerSearchTerm.toLowerCase())
+                            )
+                            .map((manager) => (
+                              <label
+                                key={manager.id}
+                                className="flex items-center space-x-2 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={formData.selectedProjectManagers.includes(manager.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setFormData({
+                                        ...formData,
+                                        selectedProjectManagers: [...formData.selectedProjectManagers, manager.id],
+                                      })
+                                    } else {
+                                      setFormData({
+                                        ...formData,
+                                        selectedProjectManagers: formData.selectedProjectManagers.filter(id => id !== manager.id),
+                                      })
+                                    }
+                                  }}
+                                  className="w-4 h-4 text-blue-600 border-gray-300 dark:border-gray-600 rounded focus:ring-blue-500 dark:focus:ring-blue-400"
+                                />
+                                <span className="text-sm text-gray-700 dark:text-gray-300">{manager.full_name}</span>
+                                {manager.id === user.id && (
+                                  <span className="text-xs text-gray-500">(You)</span>
+                                )}
+                                <span className="text-xs text-gray-500">({manager.role})</span>
+                              </label>
+                            ))}
+                          {allUsers.filter(manager => 
+                            manager.full_name?.toLowerCase().includes(managerSearchTerm.toLowerCase()) ||
+                            manager.email?.toLowerCase().includes(managerSearchTerm.toLowerCase())
+                          ).length === 0 && (
+                            <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400 text-center">
+                              No managers found
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Project managers can add/remove team members from the entire organization for this project.
+                  {!editingProject && ' If none selected, you will be the project manager by default.'}
+                </p>
+              </div>
+
               {/* Team Members Selection */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Team Members
+                  {editingProject && !canManageTeamMembers(editingProject) && (
+                    <span className="text-xs text-orange-600 dark:text-orange-400 ml-2">
+                      (Only project owner or manager can manage team members)
+                    </span>
+                  )}
                 </label>
-                <div className="border border-gray-300 dark:border-gray-600 rounded-lg p-4 max-h-60 overflow-y-auto">
+                <div className={`border border-gray-300 dark:border-gray-600 rounded-lg p-4 max-h-60 overflow-y-auto ${
+                  editingProject && !canManageTeamMembers(editingProject) ? 'opacity-50 pointer-events-none' : ''
+                }`}>
+                  {/* Search Bar */}
+                  <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 mb-2 pb-2 -mx-4 px-4">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search members..."
+                        value={memberSearchTerm}
+                        onChange={(e) => setMemberSearchTerm(e.target.value)}
+                        className="w-full pl-8 pr-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                      />
+                    </div>
+                  </div>
+                  
                   {/* Select All Option */}
-                  <label className="flex items-center space-x-2 p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded cursor-pointer border-b border-gray-200 dark:border-gray-700 mb-2 pb-2">
-                    <input
-                      type="checkbox"
-                      checked={allUsers.length > 0 && formData.selectedMembers.length === allUsers.length}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          // Select all users
-                          setFormData({
-                            ...formData,
-                            selectedMembers: allUsers.map(u => u.id),
-                          })
-                        } else {
-                          // Deselect all users
-                          setFormData({
-                            ...formData,
-                            selectedMembers: [],
-                          })
-                        }
-                      }}
-                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                    />
-                    <span className="text-sm font-semibold text-blue-700 dark:text-blue-400">Select All</span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">({allUsers.length} members)</span>
-                  </label>
+                  {(() => {
+                    const filteredMembers = allUsers.filter(m => 
+                      m.full_name?.toLowerCase().includes(memberSearchTerm.toLowerCase()) ||
+                      m.email?.toLowerCase().includes(memberSearchTerm.toLowerCase())
+                    )
+                    return (
+                      <label className="flex items-center space-x-2 p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded cursor-pointer border-b border-gray-200 dark:border-gray-700 mb-2 pb-2">
+                        <input
+                          type="checkbox"
+                          checked={filteredMembers.length > 0 && filteredMembers.every(m => formData.selectedMembers.includes(m.id))}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              // Select all filtered users
+                              const newIds = [...new Set([...formData.selectedMembers, ...filteredMembers.map(u => u.id)])]
+                              setFormData({
+                                ...formData,
+                                selectedMembers: newIds,
+                              })
+                            } else {
+                              // Deselect all filtered users
+                              setFormData({
+                                ...formData,
+                                selectedMembers: formData.selectedMembers.filter(id => !filteredMembers.some(m => m.id === id)),
+                              })
+                            }
+                          }}
+                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-semibold text-blue-700 dark:text-blue-400">Select All</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">({filteredMembers.length} members)</span>
+                      </label>
+                    )
+                  })()}
                   
                   {/* Individual Members */}
-                  {allUsers.map((member) => (
+                  {allUsers
+                    .filter(member => 
+                      member.full_name?.toLowerCase().includes(memberSearchTerm.toLowerCase()) ||
+                      member.email?.toLowerCase().includes(memberSearchTerm.toLowerCase())
+                    )
+                    .map((member) => (
                     <label
                       key={member.id}
                       className="flex items-center space-x-2 p-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded cursor-pointer"
@@ -852,6 +1128,14 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                       <span className="text-xs text-gray-500 dark:text-gray-400">({member.role})</span>
                     </label>
                   ))}
+                  {allUsers.filter(member => 
+                    member.full_name?.toLowerCase().includes(memberSearchTerm.toLowerCase()) ||
+                    member.email?.toLowerCase().includes(memberSearchTerm.toLowerCase())
+                  ).length === 0 && (
+                    <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400 text-center">
+                      No members found
+                    </div>
+                  )}
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                   {formData.selectedMembers.length} member(s) selected
@@ -859,6 +1143,24 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
               </div>
 
               <div className="flex items-center space-x-3 pt-4">
+                {editingProject && (
+                  <button
+                    onClick={async () => {
+                      if (confirm(`Are you sure you want to delete "${editingProject.name}"? This action cannot be undone.`)) {
+                        await handleDelete(editingProject.id)
+                        setShowModal(false)
+                        setEditingProject(null)
+                        setMemberSearchTerm('')
+                        setManagerSearchTerm('')
+                      }
+                    }}
+                    className="flex items-center space-x-2 px-4 py-2 bg-red-600 dark:bg-red-500 text-white rounded-lg hover:bg-red-700 dark:hover:bg-red-600 transition-all font-medium"
+                    title="Delete Project"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Delete</span>
+                  </button>
+                )}
                 <button
                   onClick={handleSave}
                   className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white px-6 py-2 rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all"
@@ -866,7 +1168,12 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                   Save
                 </button>
                 <button
-                  onClick={() => setShowModal(false)}
+                  onClick={() => {
+                    setShowModal(false)
+                    setEditingProject(null)
+                    setMemberSearchTerm('')
+                    setManagerSearchTerm('')
+                  }}
                   className="flex-1 border border-gray-300 dark:border-gray-600 px-6 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
                   Cancel
@@ -883,12 +1190,27 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
           <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-gray-700 backdrop-blur-lg">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{selectedProject.name}</h2>
-              <button
-                onClick={() => setShowDetailModal(false)}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center space-x-2">
+                {canEditProject(selectedProject) && (
+                  <button
+                    onClick={() => {
+                      setShowDetailModal(false)
+                      handleEdit(selectedProject)
+                    }}
+                    className="flex items-center space-x-2 px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors text-gray-700 dark:text-gray-300 font-medium"
+                    title="Edit Project"
+                  >
+                    <Edit className="w-4 h-4" />
+                    <span>Edit Project</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowDetailModal(false)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="space-y-6">
@@ -910,6 +1232,27 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                     {selectedProject.hours_spent?.toFixed(1) || 0} hours
                   </p>
                 </div>
+                {selectedProject.project_manager_profiles && selectedProject.project_manager_profiles.length > 0 && (
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Project Manager{selectedProject.project_manager_profiles.length > 1 ? 's' : ''}</p>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {selectedProject.project_manager_profiles.map((pm) => (
+                        <p key={pm.id} className="text-lg font-semibold text-gray-800 dark:text-white flex items-center space-x-2">
+                          <UserPlus className="w-4 h-4" />
+                          <span>{pm.full_name}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedProject.created_by_profile && (
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Project Owner</p>
+                    <p className="text-lg font-semibold text-gray-800 dark:text-white">
+                      {selectedProject.created_by_profile.full_name}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Time Tracking Info */}
