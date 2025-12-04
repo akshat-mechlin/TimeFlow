@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban } from 'lucide-react'
 import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
@@ -60,15 +61,33 @@ export default function Screenshots({ user }: ScreenshotsProps) {
   const imageRef = useRef<HTMLImageElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const userDropdownRef = useRef<HTMLDivElement>(null)
+  const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
+  const [userDropdownPosition, setUserDropdownPosition] = useState({ top: 0, left: 0 })
 
   useEffect(() => {
     fetchTeamMembers()
   }, [user.id])
 
+  // Calculate dropdown position when opening
+  useEffect(() => {
+    if (showUserDropdown && userDropdownButtonRef.current) {
+      const buttonRect = userDropdownButtonRef.current.getBoundingClientRect()
+      setUserDropdownPosition({
+        top: buttonRect.bottom + 4, // 4px gap (mt-1 = 0.25rem = 4px)
+        left: buttonRect.left,
+      })
+    }
+  }, [showUserDropdown])
+
   useEffect(() => {
     // Close dropdown when clicking outside
     const handleClickOutside = (event: MouseEvent) => {
-      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target as Node)) {
+      if (
+        userDropdownRef.current &&
+        !userDropdownRef.current.contains(event.target as Node) &&
+        userDropdownButtonRef.current &&
+        !userDropdownButtonRef.current.contains(event.target as Node)
+      ) {
         setShowUserDropdown(false)
         setUserSearchTerm('')
       }
@@ -421,6 +440,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
             <User className="w-4 h-4 text-gray-500" />
             <div className="relative">
               <button
+                ref={userDropdownButtonRef}
                 type="button"
                 onClick={() => {
                   setShowUserDropdown(!showUserDropdown)
@@ -444,17 +464,23 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                 </svg>
               </button>
               
-              {showUserDropdown && (
+              {/* Dropdown Panel - Rendered via Portal */}
+              {typeof window !== 'undefined' && showUserDropdown && createPortal(
                 <>
                   <div
-                    className="fixed inset-0 z-[90]"
+                    className="fixed inset-0 z-[9997]"
                     onClick={() => {
                       setShowUserDropdown(false)
                       setUserSearchTerm('')
                     }}
                   ></div>
                   <div 
-                    className="absolute z-[100] mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+                    ref={userDropdownRef}
+                    className="fixed z-[9998] w-64 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+                    style={{
+                      top: `${userDropdownPosition.top}px`,
+                      left: `${userDropdownPosition.left}px`,
+                    }}
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Search Bar */}
@@ -507,7 +533,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                       )}
                     </div>
                   </div>
-                </>
+                </>,
+                document.body
               )}
             </div>
           </div>

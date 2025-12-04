@@ -461,7 +461,7 @@ function App() {
                           } 
                         />
                         <Route path="/download" element={<Download />} />
-                        <Route path="/profile" element={<Profile user={user} />} />
+                        <Route path="/profile" element={<Profile user={user} onProfileUpdate={fetchUserProfile} />} />
                         <Route path="*" element={<Navigate to="/" replace />} />
                       </Routes>
                     </Layout>

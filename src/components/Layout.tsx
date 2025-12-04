@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -9,7 +9,6 @@ import {
   Users,
   Settings,
   User,
-  Search,
   LogOut,
   Menu,
   Clock,
@@ -19,6 +18,7 @@ import {
   Moon,
 } from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext'
+import NotificationBell from './NotificationBell'
 import type { Tables } from '../types/database'
 
 type Profile = Tables<'profiles'>
@@ -33,6 +33,12 @@ export default function Layout({ children, user }: LayoutProps) {
   const navigate = useNavigate()
   const { theme, toggleTheme } = useTheme()
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [imageError, setImageError] = useState(false)
+
+  // Reset image error when avatar_url changes
+  useEffect(() => {
+    setImageError(false)
+  }, [(user as any).avatar_url])
 
   const handleLogout = async () => {
     const { supabase } = await import('../lib/supabase')
@@ -53,6 +59,19 @@ export default function Layout({ children, user }: LayoutProps) {
     { icon: Download, label: 'Download App', path: '/download' },
     { icon: User, label: 'Profile', path: '/profile' },
   ]
+
+  // Get current page name and icon
+  const getCurrentPageInfo = () => {
+    const currentItem = menuItems.find(item => item.path === location.pathname)
+    if (currentItem) {
+      return { label: currentItem.label, icon: currentItem.icon }
+    }
+    // Fallback for unknown routes
+    return { label: 'Dashboard', icon: LayoutDashboard }
+  }
+
+  const currentPage = getCurrentPageInfo()
+  const CurrentPageIcon = currentPage.icon
 
   return (
     <div className="flex h-screen">
@@ -142,18 +161,23 @@ export default function Layout({ children, user }: LayoutProps) {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
         <header className="h-16 bg-gradient-to-r from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-6 shadow-sm backdrop-blur-lg">
-          <div className="flex items-center flex-1 max-w-md">
-            <div className="relative w-full">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
-              <input
-                type="text"
-                placeholder="Search..."
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
-              />
+          <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 rounded-lg flex items-center justify-center shadow-lg">
+                <CurrentPageIcon className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-gray-800 dark:text-white">
+                  {currentPage.label}
+                </h1>
+              </div>
             </div>
           </div>
 
           <div className="flex items-center space-x-4">
+                {/* Notification Bell */}
+                <NotificationBell userId={user.id} />
+
                 {/* Theme Toggle */}
                 <motion.button
                   onClick={toggleTheme}
@@ -188,8 +212,18 @@ export default function Layout({ children, user }: LayoutProps) {
 
             {/* User Profile */}
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 rounded-full flex items-center justify-center text-white font-semibold shadow-lg">
-                {user.full_name ? user.full_name.charAt(0).toUpperCase() : 'U'}
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 rounded-full flex items-center justify-center text-white font-semibold shadow-lg overflow-hidden relative">
+                {(user as any).avatar_url && !imageError ? (
+                  <img
+                    key={(user as any).avatar_url}
+                    src={(user as any).avatar_url}
+                    alt={user.full_name}
+                    className="w-full h-full object-cover"
+                    onError={() => setImageError(true)}
+                  />
+                ) : (
+                  <span>{user.full_name ? user.full_name.charAt(0).toUpperCase() : 'U'}</span>
+                )}
               </div>
               {sidebarOpen && (
                 <div className="flex flex-col">

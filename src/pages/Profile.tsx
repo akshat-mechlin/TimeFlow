@@ -16,6 +16,7 @@ type TimeEntry = Tables<'time_entries'>
 
 interface ProfileProps {
   user: Profile
+  onProfileUpdate?: (userId: string) => void
 }
 
 interface UserStats {
@@ -32,7 +33,7 @@ interface UserStats {
   absentDays: number
 }
 
-export default function Profile({ user: initialUser }: ProfileProps) {
+export default function Profile({ user: initialUser, onProfileUpdate }: ProfileProps) {
   const [searchParams] = useSearchParams()
   const viewUserId = searchParams.get('userId')
   const [user, setUser] = useState(initialUser)
@@ -256,6 +257,12 @@ export default function Profile({ user: initialUser }: ProfileProps) {
 
         setProfileImageUrl(data.publicUrl)
         setUser({ ...user, avatar_url: data.publicUrl } as Profile)
+        
+        // Refresh user profile in App.tsx to update Layout component
+        if (onProfileUpdate) {
+          onProfileUpdate(user.id)
+        }
+        
         showSuccess('Profile picture updated successfully!')
       }
     } catch (error: any) {

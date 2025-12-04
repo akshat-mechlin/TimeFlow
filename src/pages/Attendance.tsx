@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase, hrmsSupabase } from '../lib/supabase'
 import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw } from 'lucide-react'
 import { format, parseISO, subDays, subHours, addHours } from 'date-fns'
@@ -54,6 +55,8 @@ export default function Attendance({ user }: AttendanceProps) {
   const [loading, setLoading] = useState(true)
   const selectedUserIdsRef = useRef<string[]>(selectedUserIds)
   const userDropdownRef = useRef<HTMLDivElement>(null)
+  const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
+  const [userDropdownPosition, setUserDropdownPosition] = useState({ top: 0, left: 0 })
 
   const IST_TIMEZONE = 'Asia/Kolkata'
   const TRACKER_RESET_HOUR = 6 // 6 AM IST
@@ -63,10 +66,26 @@ export default function Attendance({ user }: AttendanceProps) {
     selectedUserIdsRef.current = selectedUserIds
   }, [selectedUserIds])
 
+  // Calculate dropdown position when opening
+  useEffect(() => {
+    if (showUserDropdown && userDropdownButtonRef.current) {
+      const buttonRect = userDropdownButtonRef.current.getBoundingClientRect()
+      setUserDropdownPosition({
+        top: buttonRect.bottom + 4, // 4px gap (mt-1 = 0.25rem = 4px)
+        left: buttonRect.left,
+      })
+    }
+  }, [showUserDropdown])
+
   // Handle clicks outside dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target as Node)) {
+      if (
+        userDropdownRef.current &&
+        !userDropdownRef.current.contains(event.target as Node) &&
+        userDropdownButtonRef.current &&
+        !userDropdownButtonRef.current.contains(event.target as Node)
+      ) {
         setShowUserDropdown(false)
       }
     }
@@ -86,6 +105,8 @@ export default function Attendance({ user }: AttendanceProps) {
 
   useEffect(() => {
     // Fetch attendance records when filters change
+    // For employees, we can fetch immediately since teamMembers will only contain themselves
+    // For others, wait a bit to ensure teamMembers are loaded, or fetch anyway (fallback will handle missing profiles)
     fetchAttendanceRecords()
   }, [selectedUserIds, startDate, endDate])
 
@@ -230,9 +251,30 @@ export default function Attendance({ user }: AttendanceProps) {
 
       // For each user, calculate attendance for each day in the date range
       for (const userId of usersToProcess) {
-        // Get user profile from teamMembers or from time entries
+        // Get user profile from teamMembers first, then from time entries
         const userEntries = entries.filter((e) => e.user_id === userId)
-        const userProfile = teamMembers.find(m => m.id === userId) || userEntries[0]?.profile
+        let userProfile = teamMembers.find(m => m.id === userId)
+        
+        // If not found in teamMembers, try to get from time entries
+        if (!userProfile && userEntries.length > 0) {
+          userProfile = userEntries[0]?.profile
+        }
+        
+        // If still not found, fetch it directly (fallback)
+        if (!userProfile) {
+          try {
+            const { data: profileData } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .single()
+            if (profileData) {
+              userProfile = profileData
+            }
+          } catch (error) {
+            console.error('Error fetching profile for user:', userId, error)
+          }
+        }
 
         // Generate all dates in the range (IST dates)
         const currentDate = new Date(startIST)
@@ -686,8 +728,9 @@ export default function Attendance({ user }: AttendanceProps) {
             {/* User Filter - Multiple select with checkboxes */}
             <div className="relative flex items-center space-x-2" ref={userDropdownRef}>
               <User className="w-4 h-4 text-gray-500" />
-            <div className="relative z-[100]">
+            <div className="relative">
               <button
+                ref={userDropdownButtonRef}
                 type="button"
                 onClick={() => {
                   setShowUserDropdown(!showUserDropdown)
@@ -714,17 +757,23 @@ export default function Attendance({ user }: AttendanceProps) {
                 </svg>
               </button>
               
-              {showUserDropdown && (
+              {/* Dropdown Panel - Rendered via Portal */}
+              {typeof window !== 'undefined' && showUserDropdown && createPortal(
                 <>
                   <div
-                    className="fixed inset-0 z-[90]"
+                    className="fixed inset-0 z-[9997]"
                     onClick={() => {
                       setShowUserDropdown(false)
                       setUserSearchTerm('')
                     }}
                   ></div>
                   <div 
-                    className="absolute z-[100] mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+                    ref={userDropdownRef}
+                    className="fixed z-[9998] w-64 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl max-h-60 overflow-y-auto"
+                    style={{
+                      top: `${userDropdownPosition.top}px`,
+                      left: `${userDropdownPosition.left}px`,
+                    }}
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Search Bar */}
@@ -800,7 +849,8 @@ export default function Attendance({ user }: AttendanceProps) {
                       </label>
                     ))}
                   </div>
-                </>
+                </>,
+                document.body
               )}
             </div>
           </div>
