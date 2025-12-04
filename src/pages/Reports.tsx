@@ -587,20 +587,34 @@ export default function Reports({ user }: ReportsProps) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Date Range */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Date Range</label>
-            <div className="flex items-center space-x-2">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
+              <span>Date Range</span>
+            </label>
+            <div className="flex items-center space-x-2 h-10">
               <input
                 type="date"
                 value={format(dateRange.start, 'yyyy-MM-dd')}
-                onChange={(e) => setDateRange(prev => ({ ...prev, start: new Date(e.target.value) }))}
-                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setDateRange(prev => ({ ...prev, start: new Date(e.target.value) }))
+                  } else {
+                    setDateRange(prev => ({ ...prev, start: new Date() }))
+                  }
+                }}
+                className="flex-1 px-3 py-2 h-full border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
-              <span className="text-gray-600 dark:text-gray-400 text-sm">to</span>
+              <span className="text-gray-600 dark:text-gray-400 text-sm flex-shrink-0">to</span>
               <input
                 type="date"
                 value={format(dateRange.end, 'yyyy-MM-dd')}
-                onChange={(e) => setDateRange(prev => ({ ...prev, end: new Date(e.target.value) }))}
-                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setDateRange(prev => ({ ...prev, end: new Date(e.target.value) }))
+                  } else {
+                    setDateRange(prev => ({ ...prev, end: new Date() }))
+                  }
+                }}
+                className="flex-1 px-3 py-2 h-full border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
           </div>
@@ -619,7 +633,7 @@ export default function Reports({ user }: ReportsProps) {
                       setUserSearchTerm('')
                     }
                   }}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm text-left flex items-center justify-between focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm text-left flex items-center justify-between focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <span className="truncate">
                     {selectedUserIds.length === 0 
@@ -710,7 +724,7 @@ export default function Reports({ user }: ReportsProps) {
               <select
                 value={selectedTeam}
                 onChange={(e) => setSelectedTeam(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="all">All Teams</option>
                 {teams.map((team) => (
@@ -728,7 +742,7 @@ export default function Reports({ user }: ReportsProps) {
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
                 <span>Team/Department</span>
               </label>
-              <div className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm">
+              <div className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm flex items-center">
                 {user.team}
               </div>
             </div>
@@ -743,7 +757,7 @@ export default function Reports({ user }: ReportsProps) {
               <select
                 value={selectedRole}
                 onChange={(e) => setSelectedRole(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="all">All Roles</option>
                 <option value="admin">Admin</option>
@@ -764,7 +778,7 @@ export default function Reports({ user }: ReportsProps) {
               <select
                 value={selectedProject}
                 onChange={(e) => setSelectedProject(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="all">All Projects</option>
                 {projects.map((project) => (

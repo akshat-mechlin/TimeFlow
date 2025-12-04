@@ -558,8 +558,14 @@ export default function Screenshots({ user }: ScreenshotsProps) {
             <Calendar className="w-4 h-4 text-white dark:text-white" />
             <input
               type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
+              value={selectedDate || format(new Date(), 'yyyy-MM-dd')}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setSelectedDate(e.target.value)
+                } else {
+                  setSelectedDate(format(new Date(), 'yyyy-MM-dd'))
+                }
+              }}
               max={format(new Date(), 'yyyy-MM-dd')}
               className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />

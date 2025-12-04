@@ -163,10 +163,10 @@ export default function Attendance({ user }: AttendanceProps) {
       const endIST = parseISO(endDate)
       
       // Get the attendance period for start date (6 AM IST of start date)
-      const { periodStart: startPeriodStart } = getAttendancePeriod(startDate)
+      const { periodStart: startPeriodStart } = getAttendancePeriod(validStartDate)
       
       // Get the attendance period for end date (5:59:59 AM IST of next day after end date)
-      const { periodEnd: endPeriodEnd } = getAttendancePeriod(endDate)
+      const { periodEnd: endPeriodEnd } = getAttendancePeriod(validEndDate)
       
       // Fetch time entries that might fall in any of these attendance periods
       // We need to fetch a wider range to account for entries that might belong to different attendance dates
@@ -672,10 +672,10 @@ export default function Attendance({ user }: AttendanceProps) {
               <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-1">Export Attendance Report</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 Export {filteredRecords.length} {filteredRecords.length === 1 ? 'record' : 'records'} 
-                {startDate !== endDate && (
+                {startDate && endDate && startDate !== endDate && (
                   <span> from {format(parseISO(startDate), 'MMM d, yyyy')} to {format(parseISO(endDate), 'MMM d, yyyy')}</span>
                 )}
-                {startDate === endDate && (
+                {startDate && endDate && startDate === endDate && (
                   <span> for {format(parseISO(startDate), 'MMM d, yyyy')}</span>
                 )}
                 {selectedUserIds.length > 0 && selectedUserIds.length < teamMembers.length && (
@@ -861,13 +861,18 @@ export default function Attendance({ user }: AttendanceProps) {
             <span className="text-sm text-gray-600 dark:text-gray-400">From:</span>
             <input
               type="date"
-              value={startDate}
+              value={startDate || ''}
               onChange={(e) => {
                 const newStartDate = e.target.value
-                setStartDate(newStartDate)
-                // Ensure start date is not after end date
-                if (newStartDate > endDate) {
-                  setEndDate(newStartDate)
+                if (newStartDate) {
+                  setStartDate(newStartDate)
+                  // Ensure start date is not after end date
+                  if (endDate && newStartDate > endDate) {
+                    setEndDate(newStartDate)
+                  }
+                } else {
+                  // If cleared, set to today's date
+                  setStartDate(format(new Date(), 'yyyy-MM-dd'))
                 }
               }}
               max={format(new Date(), 'yyyy-MM-dd')}
@@ -876,13 +881,18 @@ export default function Attendance({ user }: AttendanceProps) {
             <span className="text-sm text-gray-600 dark:text-gray-400">To:</span>
             <input
               type="date"
-              value={endDate}
+              value={endDate || ''}
               onChange={(e) => {
                 const newEndDate = e.target.value
-                setEndDate(newEndDate)
-                // Ensure end date is not before start date
-                if (newEndDate < startDate) {
-                  setStartDate(newEndDate)
+                if (newEndDate) {
+                  setEndDate(newEndDate)
+                  // Ensure end date is not before start date
+                  if (startDate && newEndDate < startDate) {
+                    setStartDate(newEndDate)
+                  }
+                } else {
+                  // If cleared, set to today's date
+                  setEndDate(format(new Date(), 'yyyy-MM-dd'))
                 }
               }}
               min={startDate}
