@@ -18,6 +18,7 @@ const AdminPanel = lazy(() => import('./pages/AdminPanel'))
 const Profile = lazy(() => import('./pages/Profile'))
 const Download = lazy(() => import('./pages/Download'))
 const Login = lazy(() => import('./pages/Login'))
+const LoginDirect = lazy(() => import('./pages/LoginDirect'))
 
 // Helper function to build redirect URL with query parameters
 // Handles both custom protocol URLs (tracker://callback) and HTTP URLs (http://localhost:5174/callback)
@@ -437,6 +438,10 @@ function App() {
               <Route 
                 path="/auth/callback" 
                 element={<AuthCallback onAuthSuccess={fetchUserProfile} />} 
+              />
+              <Route 
+                path="/login/direct" 
+                element={<LoginDirect onLogin={fetchUserProfile} />} 
               />
               {!user ? (
                 <Route path="*" element={<Login onLogin={fetchUserProfile} />} />

@@ -66,6 +66,8 @@ export default function Reports({ user }: ReportsProps) {
   const [teams, setTeams] = useState<string[]>([])
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([])
   const [timeEntries, setTimeEntries] = useState<any[]>([])
+  const [hasDefaultProjectEntries, setHasDefaultProjectEntries] = useState(false)
+  const [defaultProjectId, setDefaultProjectId] = useState<string | null>(null) // ID of "Default Project" if it exists in DB
   const userDropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -140,12 +142,25 @@ export default function Reports({ user }: ReportsProps) {
           projectsQuery = projectsQuery.in('id', projectIds)
         } else {
           setProjects([])
+          setDefaultProjectId(null)
           return
         }
       }
       
       const { data: projectsData } = await projectsQuery
-      setProjects(projectsData || [])
+      
+      // Check if there's a project named "Default Project" in the database
+      const defaultProject = (projectsData || [])?.find(p => p.name.toLowerCase() === 'default project')
+      if (defaultProject) {
+        // Use the existing "Default Project" from database
+        setDefaultProjectId(defaultProject.id)
+        // Filter it out from the regular projects list to avoid duplicates
+        setProjects((projectsData || []).filter(p => p.id !== defaultProject.id))
+      } else {
+        // No "Default Project" in database, will use hardcoded option
+        setDefaultProjectId(null)
+        setProjects(projectsData || [])
+      }
     } catch (error) {
       console.error('Error fetching filter options:', error)
     }
@@ -242,18 +257,33 @@ export default function Reports({ user }: ReportsProps) {
       // Store time entries for export
       setTimeEntries(fetchedTimeEntries || [])
 
+      // Check if there are any entries with null project_id (default project entries)
+      const hasDefaultEntries = (fetchedTimeEntries || []).some((entry: any) => {
+        if (!entry.project_time_entries || entry.project_time_entries.length === 0) {
+          return true
+        }
+        return entry.project_time_entries.some((pte: any) => pte.project_id === null)
+      })
+      setHasDefaultProjectEntries(hasDefaultEntries)
+
       // Filter by project if selected
       let filteredEntries = fetchedTimeEntries || []
       if (selectedProject !== 'all') {
-        if (selectedProject === '__default_project__') {
+        // Check if selected project is the default project (either from DB or hardcoded)
+        const isDefaultProject = selectedProject === '__default_project__' || selectedProject === defaultProjectId
+        
+        if (isDefaultProject) {
           // Filter for default project (entries with null project_id or no project_time_entries)
+          // OR entries linked to the "Default Project" in database
           filteredEntries = filteredEntries.filter((entry: any) => {
             // Entry has no project_time_entries at all
             if (!entry.project_time_entries || entry.project_time_entries.length === 0) {
               return true
             }
-            // Entry has project_time_entries but with null project_id
-            return entry.project_time_entries.some((pte: any) => pte.project_id === null)
+            // Entry has project_time_entries - check if it's linked to default project
+            return entry.project_time_entries.some((pte: any) => 
+              pte.project_id === null || pte.project_id === defaultProjectId
+            )
           })
         } else {
           // Filter for specific project
@@ -276,9 +306,20 @@ export default function Reports({ user }: ReportsProps) {
             const projectId = pte.project_id
             const projectName = pte.projects?.name || 'Unknown Project'
             
-            // Handle entries with null project_id (default project)
-            const key = projectId || NO_PROJECT_KEY
-            const displayName = projectId ? projectName : 'Default Project'
+            // Handle entries with null project_id or entries linked to default project in DB
+            // All should be grouped under "Default Project"
+            let key: string
+            let displayName: string
+            
+            if (projectId === null || projectId === defaultProjectId) {
+              // This is a default project entry - use consistent key
+              key = defaultProjectId || NO_PROJECT_KEY
+              displayName = 'Default Project'
+            } else {
+              // Regular project entry
+              key = projectId
+              displayName = projectName
+            }
             
             if (!projectHours[key]) {
               projectHours[key] = { name: displayName, hours: 0 }
@@ -287,10 +328,11 @@ export default function Reports({ user }: ReportsProps) {
           })
         } else {
           // Entry has no project_time_entries at all - count as Default Project
-          if (!projectHours[NO_PROJECT_KEY]) {
-            projectHours[NO_PROJECT_KEY] = { name: 'Default Project', hours: 0 }
+          const key = defaultProjectId || NO_PROJECT_KEY
+          if (!projectHours[key]) {
+            projectHours[key] = { name: 'Default Project', hours: 0 }
           }
-          projectHours[NO_PROJECT_KEY].hours += (entry.duration || 0) / 3600
+          projectHours[key].hours += (entry.duration || 0) / 3600
         }
       })
 
@@ -803,7 +845,11 @@ export default function Reports({ user }: ReportsProps) {
               className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="all">All Projects</option>
-              <option value="__default_project__">Default Project</option>
+              {/* Always show exactly one "Default Project" option */}
+              {/* If defaultProjectId exists, use that project from DB, otherwise use hardcoded option */}
+              {hasDefaultProjectEntries && (
+                <option value={defaultProjectId || '__default_project__'}>Default Project</option>
+              )}
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name}
