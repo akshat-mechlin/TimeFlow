@@ -245,9 +245,22 @@ export default function Reports({ user }: ReportsProps) {
       // Filter by project if selected
       let filteredEntries = fetchedTimeEntries || []
       if (selectedProject !== 'all') {
-        filteredEntries = filteredEntries.filter((entry: any) => {
-          return entry.project_time_entries?.some((pte: any) => pte.project_id === selectedProject)
-        })
+        if (selectedProject === '__default_project__') {
+          // Filter for default project (entries with null project_id or no project_time_entries)
+          filteredEntries = filteredEntries.filter((entry: any) => {
+            // Entry has no project_time_entries at all
+            if (!entry.project_time_entries || entry.project_time_entries.length === 0) {
+              return true
+            }
+            // Entry has project_time_entries but with null project_id
+            return entry.project_time_entries.some((pte: any) => pte.project_id === null)
+          })
+        } else {
+          // Filter for specific project
+          filteredEntries = filteredEntries.filter((entry: any) => {
+            return entry.project_time_entries?.some((pte: any) => pte.project_id === selectedProject)
+          })
+        }
       }
 
       // Use filtered entries for calculations
@@ -780,25 +793,24 @@ export default function Reports({ user }: ReportsProps) {
           )}
 
           {/* Project Filter */}
-          {projects.length > 0 && (
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
-                <span>Project</span>
-              </label>
-              <select
-                value={selectedProject}
-                onChange={(e) => setSelectedProject(e.target.value)}
-                className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Projects</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
+              <span>Project</span>
+            </label>
+            <select
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              className="w-full px-3 py-2 h-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All Projects</option>
+              <option value="__default_project__">Default Project</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
