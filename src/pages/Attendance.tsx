@@ -163,10 +163,10 @@ export default function Attendance({ user }: AttendanceProps) {
       const endIST = parseISO(endDate)
       
       // Get the attendance period for start date (6 AM IST of start date)
-      const { periodStart: startPeriodStart } = getAttendancePeriod(validStartDate)
+      const { periodStart: startPeriodStart } = getAttendancePeriod(startDate)
       
       // Get the attendance period for end date (5:59:59 AM IST of next day after end date)
-      const { periodEnd: endPeriodEnd } = getAttendancePeriod(validEndDate)
+      const { periodEnd: endPeriodEnd } = getAttendancePeriod(endDate)
       
       // Fetch time entries that might fall in any of these attendance periods
       // We need to fetch a wider range to account for entries that might belong to different attendance dates
