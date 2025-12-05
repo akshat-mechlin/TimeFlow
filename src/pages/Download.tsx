@@ -1,8 +1,33 @@
 import { useState, useEffect } from 'react'
-import { Download as DownloadIcon, Monitor, Laptop, CheckCircle } from 'lucide-react'
+import { Download as DownloadIcon } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../contexts/ToastContext'
 import Loader from '../components/Loader'
+import packageJson from '../../package.json'
+
+// Windows Icon Component
+const WindowsIcon = ({ className }: { className?: string }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    className={className}
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path d="M3 12V6.75l6-1.5v6.75L3 12zm17-9v8.75l-10 .15V5.21L20 3zM3 13l6 .15v6.75l-6-1.5V13zm17 8v-8.75L10 12.4v6.44l10 1.6z" />
+  </svg>
+)
+
+// Apple/Mac Icon Component
+const AppleIcon = ({ className }: { className?: string }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    className={className}
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
+  </svg>
+)
 
 export default function Download() {
   const [downloadLinks, setDownloadLinks] = useState({
@@ -181,15 +206,6 @@ export default function Download() {
     }
   }
 
-  const features = [
-    'Track time automatically',
-    'Offline mode support',
-    'Desktop notifications',
-    'Screenshot capture',
-    'Activity monitoring',
-    'Sync with web dashboard',
-  ]
-
   if (loading) {
     return <Loader size="lg" text="Loading download links..." />
   }
@@ -198,7 +214,12 @@ export default function Download() {
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-blue-600 dark:bg-blue-500 text-white p-8 rounded-xl">
-        <h1 className="text-4xl font-bold mb-2">Download TimeFlow Desktop App</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-4xl font-bold">Download TimeFlow Desktop App</h1>
+          <span className="px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-sm font-semibold border border-white/30">
+            v{packageJson.version}
+          </span>
+        </div>
         <p className="text-blue-100 text-lg">
           Get the full-featured desktop application for Windows and macOS
         </p>
@@ -208,10 +229,15 @@ export default function Download() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Windows */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-center w-16 h-16 bg-blue-100 rounded-xl mb-4 mx-auto">
-            <Monitor className="w-8 h-8 text-blue-600" />
+          <div className="flex items-center justify-center w-16 h-16 bg-blue-100 dark:bg-blue-900/30 rounded-xl mb-4 mx-auto">
+            <WindowsIcon className="w-8 h-8 text-blue-600 dark:text-blue-400" />
           </div>
-          <h3 className="text-xl font-semibold text-gray-800 dark:text-white text-center mb-2">Windows</h3>
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <h3 className="text-xl font-semibold text-gray-800 dark:text-white text-center">Windows</h3>
+            <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-xs font-semibold">
+              v{packageJson.version}
+            </span>
+          </div>
           <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-6">
             Windows 10/11 (64-bit)
           </p>
@@ -228,10 +254,15 @@ export default function Download() {
 
         {/* macOS */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-center w-16 h-16 bg-gray-100 rounded-xl mb-4 mx-auto">
-            <Laptop className="w-8 h-8 text-gray-700" />
+          <div className="flex items-center justify-center w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-xl mb-4 mx-auto">
+            <AppleIcon className="w-8 h-8 text-gray-800 dark:text-gray-200" />
           </div>
-          <h3 className="text-xl font-semibold text-gray-800 dark:text-white text-center mb-2">macOS</h3>
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <h3 className="text-xl font-semibold text-gray-800 dark:text-white text-center">macOS</h3>
+            <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-xs font-semibold">
+              v{packageJson.version}
+            </span>
+          </div>
           <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-6">
             macOS 10.15 or later
           </p>
@@ -244,19 +275,6 @@ export default function Download() {
             <span>Download for macOS</span>
           </button>
           <p className="text-xs text-gray-500 text-center mt-3">.dmg installer</p>
-        </div>
-      </div>
-
-      {/* Features */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="text-2xl font-semibold text-gray-800 dark:text-white mb-6">Desktop App Features</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {features.map((feature, index) => (
-            <div key={index} className="flex items-center space-x-3">
-              <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
-              <span className="text-gray-700 dark:text-gray-300">{feature}</span>
-            </div>
-          ))}
         </div>
       </div>
 

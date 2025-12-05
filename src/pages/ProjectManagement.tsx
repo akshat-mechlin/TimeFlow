@@ -185,13 +185,36 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
             .select('time_entry_id, time_entries(user_id, duration)')
             .eq('project_id', project.id)
 
-          const totalHoursSpent = (projectTimeEntries || []).reduce((sum, entry: any) => {
+          // Check if this is a default project (by name) - if so, also include entries with null project_id
+          // Common default project names: "default", "unassigned", "no project", "general", "misc"
+          const projectNameLower = project.name.toLowerCase()
+          const isDefaultProject = projectNameLower.includes('default') || 
+                                  projectNameLower === 'unassigned' ||
+                                  projectNameLower === 'no project' ||
+                                  projectNameLower === 'general' ||
+                                  projectNameLower === 'misc' ||
+                                  projectNameLower === 'miscellaneous'
+          
+          let nullProjectEntries: any[] = []
+          if (isDefaultProject) {
+            // Also fetch entries with null project_id for default project
+            const { data: nullEntries } = await supabase
+              .from('project_time_entries')
+              .select('time_entry_id, time_entries(user_id, duration)')
+              .is('project_id', null)
+            nullProjectEntries = nullEntries || []
+          }
+
+          // Combine both sets of entries
+          const allProjectEntries = [...(projectTimeEntries || []), ...nullProjectEntries]
+
+          const totalHoursSpent = allProjectEntries.reduce((sum, entry: any) => {
             return sum + (entry.time_entries?.duration || 0)
           }, 0) / 3600
 
           // Calculate hours per member
           const memberHoursMap = new Map<string, { name: string; hours: number }>()
-          projectTimeEntries?.forEach((entry: any) => {
+          allProjectEntries.forEach((entry: any) => {
             const userId = entry.time_entries?.user_id
             const hours = (entry.time_entries?.duration || 0) / 3600
             if (userId) {

@@ -7,9 +7,10 @@ interface LoginProps {
 }
 
 export default function Login({ onLogin }: LoginProps) {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
+  // Email/Password login state (commented out - SSO only)
+  // const [email, setEmail] = useState('')
+  // const [password, setPassword] = useState('')
+  // const [loading, setLoading] = useState(false)
   const [ssoLoading, setSsoLoading] = useState(false)
   const { showError } = useToast()
 
@@ -36,27 +37,28 @@ export default function Login({ onLogin }: LoginProps) {
     }
   }, [callbackUrl])
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
+  // Email/Password login handler (commented out - SSO only)
+  // const handleLogin = async (e: React.FormEvent) => {
+  //   e.preventDefault()
+  //   setLoading(true)
 
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
+  //   try {
+  //     const { data, error } = await supabase.auth.signInWithPassword({
+  //       email,
+  //       password,
+  //     })
 
-      if (error) throw error
+  //     if (error) throw error
 
-      if (data.user) {
-        onLogin(data.user.id)
-      }
-    } catch (err: any) {
-      showError(err.message || 'Failed to login')
-    } finally {
-      setLoading(false)
-    }
-  }
+  //     if (data.user) {
+  //       onLogin(data.user.id)
+  //     }
+  //   } catch (err: any) {
+  //     showError(err.message || 'Failed to login')
+  //   } finally {
+  //     setLoading(false)
+  //   }
+  // }
 
   const handleMicrosoftLogin = async () => {
     try {
@@ -132,7 +134,8 @@ export default function Login({ onLogin }: LoginProps) {
           <p className="text-gray-600 dark:text-gray-300">Sign in to your account</p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-6">
+        {/* Email/Password login form (commented out - SSO only) */}
+        {/* <form onSubmit={handleLogin} className="space-y-6">
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Email
@@ -182,12 +185,12 @@ export default function Login({ onLogin }: LoginProps) {
                 Or continue with
               </span>
             </div>
-          </div>
+          </div> */}
 
           <button
             onClick={handleMicrosoftLogin}
-            disabled={loading || ssoLoading}
-            className="mt-4 w-full flex items-center justify-center space-x-3 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={ssoLoading}
+            className="w-full flex items-center justify-center space-x-3 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {ssoLoading ? (
               <>
@@ -206,10 +209,9 @@ export default function Login({ onLogin }: LoginProps) {
               </>
             )}
           </button>
-        </div>
 
         <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
-          Use your email and password or Microsoft account to sign in
+          Sign in with your Microsoft account
         </p>
       </div>
     </div>

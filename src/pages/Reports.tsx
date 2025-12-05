@@ -255,19 +255,29 @@ export default function Reports({ user }: ReportsProps) {
 
       // Prepare pie chart data (by project) - using filteredEntries
       const projectHours: { [key: string]: { name: string; hours: number } } = {}
+      const NO_PROJECT_KEY = '__no_project__'
 
       filteredEntries.forEach((entry: any) => {
         if (entry.project_time_entries && entry.project_time_entries.length > 0) {
           entry.project_time_entries.forEach((pte: any) => {
             const projectId = pte.project_id
             const projectName = pte.projects?.name || 'Unknown Project'
-            if (projectId) {
-              if (!projectHours[projectId]) {
-                projectHours[projectId] = { name: projectName, hours: 0 }
-              }
-              projectHours[projectId].hours += (entry.duration || 0) / 3600
+            
+            // Handle entries with null project_id (default project)
+            const key = projectId || NO_PROJECT_KEY
+            const displayName = projectId ? projectName : 'Default Project'
+            
+            if (!projectHours[key]) {
+              projectHours[key] = { name: displayName, hours: 0 }
             }
+            projectHours[key].hours += (entry.duration || 0) / 3600
           })
+        } else {
+          // Entry has no project_time_entries at all - count as Default Project
+          if (!projectHours[NO_PROJECT_KEY]) {
+            projectHours[NO_PROJECT_KEY] = { name: 'Default Project', hours: 0 }
+          }
+          projectHours[NO_PROJECT_KEY].hours += (entry.duration || 0) / 3600
         }
       })
 
