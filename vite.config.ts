@@ -9,7 +9,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  base: './',
+  // Use environment variable for base path (for GitHub Pages)
+  // Falls back to './' for local development
+  base: process.env.VITE_BASE_PATH || './',
   server: {
     port: 5173,
     allowedHosts:['timeflow.mechlintech.com'],

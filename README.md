@@ -75,6 +75,48 @@ The built files will be in the `dist` directory. You can preview the production 
 npm run preview
 ```
 
+## Deployment to GitHub Pages
+
+This project is configured for automatic deployment to GitHub Pages using GitHub Actions.
+
+### Setup Instructions
+
+1. **Enable GitHub Pages in your repository:**
+   - Go to your repository on GitHub
+   - Navigate to **Settings** → **Pages**
+   - Under **Source**, select **GitHub Actions**
+
+2. **Push to main/master branch:**
+   - The workflow will automatically trigger on push to `main` or `master` branch
+   - You can also manually trigger it from the **Actions** tab → **Deploy to GitHub Pages** → **Run workflow**
+
+3. **Access your deployed site:**
+   - After deployment completes, your site will be available at:
+   - `https://<username>.github.io/<repository-name>/`
+   - The URL will be shown in the Actions workflow output
+
+### Manual Deployment
+
+If you need to build locally for GitHub Pages:
+
+```bash
+# Set the base path to match your repository name
+VITE_BASE_PATH=/your-repo-name/ npm run build
+```
+
+The built files in the `dist` directory can then be deployed manually to the `gh-pages` branch or uploaded via GitHub Pages settings.
+
+### Environment Variables
+
+For GitHub Pages deployment, make sure to set your environment variables in the GitHub repository:
+- Go to **Settings** → **Secrets and variables** → **Actions**
+- Add your Supabase credentials as repository secrets:
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
+  - Any other required environment variables
+
+**Note:** If your repository name changes, update the `VITE_BASE_PATH` in `.github/workflows/deploy.yml` to match your new repository name.
+
 ## Project Structure
 
 ```
