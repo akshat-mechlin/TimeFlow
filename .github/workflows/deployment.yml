@@ -29,16 +29,17 @@ jobs:
           $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
           $BRANCH = "${{ github.ref_name }}"
           $BUILD_DATE = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
-          $COMMIT_MESSAGE = "${{ github.event.head_commit.message }}"
+          # Fix: Replace newlines in commit message with spaces
+          $COMMIT_MESSAGE = "${{ github.event.head_commit.message }}" -replace "`r`n", " " -replace "`n", " "
           $AUTHOR = "${{ github.actor }}"
           
-          echo "SHORT_SHA=$SHORT_SHA" >> $env:GITHUB_ENV
-          echo "BRANCH=$BRANCH" >> $env:GITHUB_ENV
-          echo "BUILD_DATE=$BUILD_DATE" >> $env:GITHUB_ENV
-          echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $env:GITHUB_ENV
-          echo "AUTHOR=$AUTHOR" >> $env:GITHUB_ENV
-          echo "FULL_IMAGE=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA" >> $env:GITHUB_ENV
-          echo "LATEST_IMAGE=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest" >> $env:GITHUB_ENV
+          # Set environment variables (single-line safe)
+          "SHORT_SHA=$SHORT_SHA" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BRANCH=$BRANCH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BUILD_DATE=$BUILD_DATE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AUTHOR=$AUTHOR" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FULL_IMAGE=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LATEST_IMAGE=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           
           Write-Host "========================================="
           Write-Host "Build Information"
@@ -54,7 +55,7 @@ jobs:
       - name: Login to DockerHub
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-          Write-Host "✅ Logged into DockerHub"
+          Write-Host "Logged into DockerHub"
 
       - name: Create .env file
         run: |
@@ -65,27 +66,35 @@ jobs:
           GIT_COMMIT=${{ env.SHORT_SHA }}
           BUILD_DATE=${{ env.BUILD_DATE }}
           "@ | Out-File -FilePath .env -Encoding utf8
-          Write-Host "✅ Created .env file"
+          Write-Host "Created .env file"
 
       - name: Stop existing container
         run: |
           Write-Host "Stopping existing container..."
           docker stop ${{ env.CONTAINER_NAME }} 2>$null
           docker rm ${{ env.CONTAINER_NAME }} 2>$null
-          Write-Host "✅ Container stopped and removed"
+          Write-Host "Container stopped and removed (or didn't exist)"
+        continue-on-error: true
+
+      - name: Remove old images
+        run: |
+          Write-Host "Removing old images..."
+          docker rmi ${{ env.FULL_IMAGE }} 2>$null
+          docker rmi ${{ env.LATEST_IMAGE }} 2>$null
+          Write-Host "Old images removed (or didn't exist)"
         continue-on-error: true
 
       - name: Build Docker image
         run: |
           Write-Host "Building Docker image..."
           docker compose -f timeflow/docker-compose.yml build --no-cache
-          Write-Host "✅ Image built successfully"
+          Write-Host "Image built successfully"
 
       - name: Tag images
         run: |
           Write-Host "Tagging images..."
           docker tag ${{ env.FULL_IMAGE }} ${{ env.LATEST_IMAGE }}
-          Write-Host "✅ Images tagged:"
+          Write-Host "Images tagged:"
           Write-Host "  - ${{ env.FULL_IMAGE }}"
           Write-Host "  - ${{ env.LATEST_IMAGE }}"
 
@@ -94,13 +103,13 @@ jobs:
           Write-Host "Pushing images to DockerHub..."
           docker push ${{ env.FULL_IMAGE }}
           docker push ${{ env.LATEST_IMAGE }}
-          Write-Host "✅ Images pushed to DockerHub"
+          Write-Host "Images pushed to DockerHub"
 
       - name: Deploy container
         run: |
           Write-Host "Starting container..."
           docker compose -f timeflow/docker-compose.yml up -d
-          Write-Host "✅ Container started"
+          Write-Host "Container started"
 
       - name: Wait for container startup
         run: |
@@ -119,15 +128,15 @@ jobs:
               $response = Invoke-WebRequest -Uri "http://localhost:${{ env.APP_PORT }}" -UseBasicParsing -TimeoutSec 5
               
               if ($response.StatusCode -eq 200) {
-                Write-Host "✅ Application is responding!"
+                Write-Host " Application is responding!"
                 
                 # Try to get build info
                 try {
                   $buildInfo = Invoke-WebRequest -Uri "http://localhost:${{ env.APP_PORT }}/build-info.txt" -UseBasicParsing
-                  Write-Host "`n📋 Build Information:"
+                  Write-Host "`n Build Information:"
                   Write-Host $buildInfo.Content
                 } catch {
-                  Write-Host "⚠️ Build info endpoint not available"
+                  Write-Host " Build info endpoint not available"
                 }
                 
                 $healthy = $true
@@ -135,13 +144,13 @@ jobs:
               }
             } catch {
               $attempt++
-              Write-Host "⏳ Attempt $attempt/$maxAttempts - Waiting for application to respond..."
+              Write-Host " Attempt $attempt/$maxAttempts - Waiting for application to respond..."
               Start-Sleep -Seconds 5
             }
           }
           
           if (-not $healthy) {
-            Write-Host "❌ Health check failed after $maxAttempts attempts"
+            Write-Host " Health check failed after $maxAttempts attempts"
             docker logs ${{ env.CONTAINER_NAME }} --tail 100
             exit 1
           }
@@ -151,7 +160,7 @@ jobs:
         run: |
           Write-Host "`n"
           Write-Host "========================================="
-          Write-Host "✅ DEPLOYMENT SUCCESSFUL"
+          Write-Host " DEPLOYMENT SUCCESSFUL"
           Write-Host "========================================="
           Write-Host "Container Name: ${{ env.CONTAINER_NAME }}"
           Write-Host "Commit Hash: ${{ env.SHORT_SHA }}"
@@ -159,21 +168,32 @@ jobs:
           Write-Host "Author: ${{ env.AUTHOR }}"
           Write-Host "Build Date: ${{ env.BUILD_DATE }}"
           Write-Host "Local URL: http://localhost:${{ env.APP_PORT }}"
-          Write-Host "`n📦 DockerHub Images:"
+          Write-Host "`n DockerHub Images:"
           Write-Host "  docker pull ${{ env.FULL_IMAGE }}"
           Write-Host "  docker pull ${{ env.LATEST_IMAGE }}"
-          Write-Host "`n🐳 Container Status:"
+          Write-Host "`n Container Status:"
           docker ps --filter "name=${{ env.CONTAINER_NAME }}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}"
-          Write-Host "`n📊 Image Details:"
+          Write-Host "`n Image Details:"
           docker inspect ${{ env.FULL_IMAGE }} --format='Commit: {{index .Config.Labels "git.commit"}} | Build Date: {{index .Config.Labels "build.date"}}'
           Write-Host "========================================="
 
       - name: Show logs on failure
         if: failure()
         run: |
-          Write-Host "`n❌ Deployment Failed - Container Logs:"
+          Write-Host "`n Deployment Failed"
           Write-Host "========================================="
-          docker logs ${{ env.CONTAINER_NAME }} --tail 100
+          
+          # Check if container exists
+          $containerExists = docker ps -a --filter "name=${{ env.CONTAINER_NAME }}" --format "{{.Names}}"
+          
+          if ($containerExists) {
+            Write-Host "Container Logs:"
+            docker logs ${{ env.CONTAINER_NAME }} --tail 100
+          } else {
+            Write-Host "Container '${{ env.CONTAINER_NAME }}' does not exist yet."
+            Write-Host "Build may have failed. Checking docker-compose logs..."
+            docker-compose -f timeflow/docker-compose.yml logs --tail 50
+          }
 
       - name: Cleanup
         if: always()
@@ -181,11 +201,11 @@ jobs:
           Write-Host "Cleaning up..."
           Remove-Item -Path .env -ErrorAction SilentlyContinue
           docker system prune -f
-          Write-Host "✅ Cleanup complete"
+          Write-Host "Cleanup complete"
         continue-on-error: true
 
       - name: Logout from DockerHub
         if: always()
         run: |
           docker logout
-          Write-Host "✅ Logged out from DockerHub"
+          Write-Host "Logged out from DockerHub"
