@@ -36,10 +36,42 @@ jobs:
           "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA" | Out-File $env:GITHUB_ENV -Append
           "LATEST_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest" | Out-File $env:GITHUB_ENV -Append
 
-      - name: DockerHub Login
+      # 🔍 SAFE DEBUGGING STEP
+      - name: Debug DockerHub credentials
         run: |
-          docker logout
-          "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          Write-Host "=== DockerHub Credential Debug ==="
+
+          if ([string]::IsNullOrEmpty("${{ secrets.DOCKERHUB_USERNAME }}")) {
+            Write-Error "DOCKERHUB_USERNAME is EMPTY"
+            exit 1
+          } else {
+            Write-Host "DOCKERHUB_USERNAME is set"
+            Write-Host "Username length:" "${{ secrets.DOCKERHUB_USERNAME }}".Length
+          }
+
+          if ([string]::IsNullOrEmpty("${{ secrets.DOCKERHUB_TOKEN }}")) {
+            Write-Error "DOCKERHUB_TOKEN is EMPTY"
+            exit 1
+          } else {
+            Write-Host "DOCKERHUB_TOKEN is set"
+            Write-Host "Token length:" "${{ secrets.DOCKERHUB_TOKEN }}".Length
+          }
+
+          Write-Host "Logging out of Docker..."
+          docker logout | Out-Null
+
+          Write-Host "Attempting Docker login..."
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login `
+            --username "${{ secrets.DOCKERHUB_USERNAME }}" `
+            --password-stdin
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Docker login failed"
+            exit 1
+          }
+
+          Write-Host "Docker login successful"
+          docker info | Select-String -Pattern "Username|Registry"
 
       - name: Create .env file
         run: |
