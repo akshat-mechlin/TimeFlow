@@ -121,14 +121,16 @@ jobs:
             Write-Host "Attempt $i of 30..."
             try {
               $response = Invoke-WebRequest "http://localhost:${{ env.APP_PORT }}/health" -TimeoutSec 5 -UseBasicParsing
-              Write-Host "✓ Application is healthy! Status: $($response.StatusCode)"
+              Write-Host "Application is healthy! Status: $($response.StatusCode)"
               exit 0
             } catch {
               Write-Host "Health check failed: $_"
               if ($i -eq 30) {
-                Write-Host "`n=== Final Container Logs ==="
+                Write-Host ""
+                Write-Host "=== Final Container Logs ==="
                 docker logs $env:CONTAINER_NAME --tail 100
-                Write-Host "`n=== Container Inspect ==="
+                Write-Host ""
+                Write-Host "=== Container Inspect ==="
                 docker inspect $env:CONTAINER_NAME
                 Write-Error "Application failed health check after 30 attempts"
                 exit 1
