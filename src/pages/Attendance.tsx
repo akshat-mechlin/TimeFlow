@@ -47,12 +47,16 @@ export default function Attendance({ user }: AttendanceProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [startDate, setStartDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
   const [endDate, setEndDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
-  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([user.id])
+  // HR and Accountant should see all users by default (empty array = Select All)
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>(
+    (user.role === 'hr' || user.role === 'accountant') ? [] : [user.id]
+  )
   const [activeDateRange, setActiveDateRange] = useState<'today' | 'last7' | 'last30' | 'custom'>('today')
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [teamMembers, setTeamMembers] = useState<Profile[]>([])
   const [userSearchTerm, setUserSearchTerm] = useState('')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const selectedUserIdsRef = useRef<string[]>(selectedUserIds)
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
@@ -112,11 +116,11 @@ export default function Attendance({ user }: AttendanceProps) {
 
   const fetchTeamMembers = async () => {
     try {
-      if (user.role === 'admin') {
-        // Admin can see all users
+      if (user.role === 'admin' || user.role === 'hr' || user.role === 'accountant') {
+        // Admin, HR, and Accountant can see all users
         const { data } = await supabase.from('profiles').select('*').order('full_name')
         setTeamMembers(data || [])
-      } else if (user.role === 'manager' || user.role === 'hr') {
+      } else if (user.role === 'manager') {
         // Manager can see their team members - get all users who have this manager assigned
         const { data: teamMembers } = await supabase
           .from('profiles')
@@ -154,6 +158,7 @@ export default function Attendance({ user }: AttendanceProps) {
   const fetchAttendanceRecords = async () => {
     try {
       setLoading(true)
+      setError(null)
       
       // Get current selectedUserIds from ref to avoid closure issues with real-time subscriptions
       const currentSelectedUserIds = selectedUserIdsRef.current
@@ -173,31 +178,37 @@ export default function Attendance({ user }: AttendanceProps) {
       const queryStart = subHours(startPeriodStart, 6) // Fetch from 6 hours before to be safe
       const queryEnd = endPeriodEnd
 
-      // Fetch time entries for the selected user and date range with project and activity info
+      // Determine if we're fetching for all users (Select All mode)
+      const isSelectAllMode = currentSelectedUserIds.length === 0 && 
+        (user.role === 'admin' || user.role === 'manager' || user.role === 'hr' || user.role === 'accountant')
+
+      // For Select All mode, fetch basic data first to avoid timeout
+      // For specific users, fetch full nested data
       let query = supabase
         .from('time_entries')
-        .select(`
-          *,
-          profile:profiles!time_entries_user_id_fkey(*),
-          project_time_entries(
-            project_id,
-            billable,
-            projects(
+        .select(isSelectAllMode 
+          ? `id, user_id, start_time, end_time, duration, description, profile:profiles!time_entries_user_id_fkey(id, full_name, email, team)`
+          : `*,
+            profile:profiles!time_entries_user_id_fkey(*),
+            project_time_entries(
+              project_id,
+              billable,
+              projects(
+                id,
+                name,
+                task_id,
+                tasks(name)
+              )
+            ),
+            screenshots(
               id,
-              name,
-              task_id,
-              tasks(name)
-            )
-          ),
-          screenshots(
-            id,
-            activity_logs(
-              keystrokes,
-              mouse_movements,
-              productivity_score
-            )
-          )
-        `)
+              activity_logs(
+                keystrokes,
+                mouse_movements,
+                productivity_score
+              )
+            )`
+        )
         .gte('start_time', queryStart.toISOString())
         .lte('start_time', queryEnd.toISOString())
         .order('start_time', { ascending: false })
@@ -208,9 +219,20 @@ export default function Attendance({ user }: AttendanceProps) {
         query = query.in('user_id', currentSelectedUserIds)
       }
 
-      const { data: timeEntries, error } = await query.limit(1000)
+      // Increase limit for Select All mode, but still reasonable
+      // Note: For Select All with large date ranges, consider reducing the limit further
+      const limit = isSelectAllMode ? 5000 : 1000
+      
+      const { data: timeEntries, error } = await query.limit(limit)
 
       if (error) {
+        // Handle specific timeout error (PostgreSQL error code 57014)
+        if (error.code === '57014' || 
+            error.message?.includes('timeout') || 
+            error.message?.includes('canceling statement') ||
+            error.message?.includes('statement timeout')) {
+          throw new Error('Query timeout - the date range or number of users may be too large. Please try selecting fewer users or a smaller date range.')
+        }
         console.error('Supabase error:', error)
         throw error
       }
@@ -240,7 +262,7 @@ export default function Attendance({ user }: AttendanceProps) {
       } else {
         // No users selected - show all team members (not just those with time entries)
         // This ensures leave status can be shown for all visible users
-        if (user.role === 'admin' || user.role === 'manager' || user.role === 'hr') {
+        if (user.role === 'admin' || user.role === 'manager' || user.role === 'hr' || user.role === 'accountant') {
           // Include all team members, not just those with time entries
           usersToProcess = teamMembers.map(m => m.id)
         } else {
@@ -325,23 +347,24 @@ export default function Attendance({ user }: AttendanceProps) {
             }
 
             // Process time entries with project/task and activity info
+            // Note: In Select All mode, nested data may not be fetched to avoid timeout
             const processedEntries = dayEntries.map((entry: any) => {
-              // Extract project and task information
+              // Extract project and task information (may be missing in Select All mode)
               const projects = (entry.project_time_entries || []).map((pte: any) => ({
                 project_id: pte.project_id,
                 project_name: pte.projects?.name || 'No Project',
                 task_name: pte.projects?.tasks?.name || null,
               }))
 
-              // Calculate activity totals from screenshots
+              // Calculate activity totals from screenshots (may be missing in Select All mode)
               let totalKeystrokes = 0
               let totalMouseMovements = 0
               let productivityScore = 0
               let activityCount = 0
 
-              if (entry.screenshots) {
+              if (entry.screenshots && Array.isArray(entry.screenshots)) {
                 entry.screenshots.forEach((screenshot: any) => {
-                  if (screenshot.activity_logs && screenshot.activity_logs.length > 0) {
+                  if (screenshot?.activity_logs && Array.isArray(screenshot.activity_logs)) {
                     screenshot.activity_logs.forEach((log: any) => {
                       totalKeystrokes += log.keystrokes || 0
                       totalMouseMovements += log.mouse_movements || 0
@@ -588,8 +611,10 @@ export default function Attendance({ user }: AttendanceProps) {
 
       console.log('Calculated attendance records:', attendanceRecords.length)
       setRecords(attendanceRecords)
-    } catch (error) {
-      console.error('Error fetching attendance:', error)
+    } catch (err: any) {
+      console.error('Error fetching attendance:', err)
+      const errorMessage = err.message || 'Failed to fetch attendance records. Please try again.'
+      setError(errorMessage)
       setRecords([])
     } finally {
       setLoading(false)
@@ -665,7 +690,7 @@ export default function Attendance({ user }: AttendanceProps) {
   return (
     <div className="space-y-6">
       {/* Export Report Section - At Top */}
-      {(user.role === 'admin' || user.role === 'hr' || user.role === 'manager') && (
+      {(user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant') && (
         <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
           <div className="flex items-center justify-between">
             <div>
@@ -792,22 +817,31 @@ export default function Attendance({ user }: AttendanceProps) {
                     </div>
                     
                     {/* Select All Option */}
-                    {(user.role === 'admin' || user.role === 'manager' || user.role === 'hr') && (() => {
+                    {(user.role === 'admin' || user.role === 'manager' || user.role === 'hr' || user.role === 'accountant') && (() => {
                       const filteredMembers = teamMembers.filter(m => 
                         m.full_name?.toLowerCase().includes(userSearchTerm.toLowerCase()) ||
                         m.email?.toLowerCase().includes(userSearchTerm.toLowerCase())
                       )
+                      const allFilteredSelected = filteredMembers.length > 0 && filteredMembers.every(m => selectedUserIds.includes(m.id))
+                      const isSelectAllMode = selectedUserIds.length === 0
                       return (
                         <label className="flex items-center space-x-2 p-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded cursor-pointer border-b border-gray-200 dark:border-gray-700 sticky top-[50px] bg-white dark:bg-gray-800">
                           <input
                             type="checkbox"
-                            checked={filteredMembers.length > 0 && filteredMembers.every(m => selectedUserIds.includes(m.id))}
+                            checked={isSelectAllMode || allFilteredSelected}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                const newIds = [...new Set([...selectedUserIds, ...filteredMembers.map(m => m.id)])]
-                                setSelectedUserIds(newIds)
+                                // Select All mode: clear the array to indicate all users selected
+                                setSelectedUserIds([])
                               } else {
-                                setSelectedUserIds(selectedUserIds.filter(id => !filteredMembers.some(m => m.id === id)))
+                                // Deselect All: if in select all mode, select none (empty array stays empty)
+                                // If specific users selected, remove filtered members
+                                if (isSelectAllMode) {
+                                  // Already empty, do nothing (or could set to current user only)
+                                  setSelectedUserIds([user.id])
+                                } else {
+                                  setSelectedUserIds(selectedUserIds.filter(id => !filteredMembers.some(m => m.id === id)))
+                                }
                               }
                             }}
                             className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
@@ -992,24 +1026,59 @@ export default function Attendance({ user }: AttendanceProps) {
           </div>
           
           {/* Clear Filter Button - Rightmost side */}
-          {(selectedUserIds.length !== 1 || selectedUserIds[0] !== user.id || startDate !== format(new Date(), 'yyyy-MM-dd') || endDate !== format(new Date(), 'yyyy-MM-dd') || searchTerm) && (
-            <button
-              onClick={() => {
-                // Reset to default: show current user for today
-                setSelectedUserIds([user.id])
-                setStartDate(format(new Date(), 'yyyy-MM-dd'))
-                setEndDate(format(new Date(), 'yyyy-MM-dd'))
-                setSearchTerm('')
-                setActiveDateRange('today')
-              }}
-              className="flex items-center space-x-2 px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
-            >
-              <X className="w-4 h-4" />
-              <span>Clear Filters</span>
-            </button>
-          )}
+          {(() => {
+            const isHROrAccountant = user.role === 'hr' || user.role === 'accountant'
+            const isDefaultState = isHROrAccountant
+              ? (selectedUserIds.length === 0 && startDate === format(new Date(), 'yyyy-MM-dd') && endDate === format(new Date(), 'yyyy-MM-dd') && !searchTerm)
+              : (selectedUserIds.length === 1 && selectedUserIds[0] === user.id && startDate === format(new Date(), 'yyyy-MM-dd') && endDate === format(new Date(), 'yyyy-MM-dd') && !searchTerm)
+            
+            return !isDefaultState && (
+              <button
+                onClick={() => {
+                  // Reset to default: HR/Accountant see all users, others see only themselves
+                  setSelectedUserIds(isHROrAccountant ? [] : [user.id])
+                  setStartDate(format(new Date(), 'yyyy-MM-dd'))
+                  setEndDate(format(new Date(), 'yyyy-MM-dd'))
+                  setSearchTerm('')
+                  setActiveDateRange('today')
+                }}
+                className="flex items-center space-x-2 px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+              >
+                <X className="w-4 h-4" />
+                <span>Clear Filters</span>
+              </button>
+            )
+          })()}
         </div>
       </div>
+
+      {/* Error Message */}
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 mb-4">
+          <div className="flex items-start space-x-3">
+            <XCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold text-red-800 dark:text-red-400 mb-1">Error Loading Attendance</h3>
+              <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+              <button
+                onClick={() => {
+                  setError(null)
+                  fetchAttendanceRecords()
+                }}
+                className="mt-2 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
+              >
+                Try again
+              </button>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              className="text-red-400 hover:text-red-600 dark:hover:text-red-300"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Attendance Table */}
       <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden backdrop-blur-sm relative z-10">

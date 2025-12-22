@@ -35,6 +35,10 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
   const [editingProject, setEditingProject] = useState<ProjectWithDetails | null>(null)
   const [showNewTaskInput, setShowNewTaskInput] = useState(false)
   const [newTaskName, setNewTaskName] = useState('')
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  const [editingTaskName, setEditingTaskName] = useState('')
+  const [showTaskDropdown, setShowTaskDropdown] = useState(false)
+  const taskDropdownRef = useRef<HTMLDivElement>(null)
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -47,12 +51,55 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
   const [managerSearchTerm, setManagerSearchTerm] = useState('')
   const [showManagerDropdown, setShowManagerDropdown] = useState(false)
   const managerDropdownRef = useRef<HTMLDivElement>(null)
+  const [groups, setGroups] = useState<Array<{ id: string; name: string; members?: Array<{ user_id: string }> }>>([])
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([])
+  const [showGroupDropdown, setShowGroupDropdown] = useState(false)
+  const groupDropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchProjects()
     fetchTasks()
     fetchAllUsers()
+    fetchGroups()
   }, [])
+
+  const fetchGroups = async () => {
+    try {
+      // Only managers, HR, and admins can see groups
+      if (user.role === 'employee') {
+        setGroups([])
+        return
+      }
+
+      let query = supabase
+        .from('groups')
+        .select(`
+          *,
+          group_members(user_id)
+        `)
+        .order('name', { ascending: true })
+
+      // Managers can only see groups they created or groups for their team
+      if (user.role === 'manager' || user.role === 'hr') {
+        query = query.or(`manager_id.eq.${user.id},created_by.eq.${user.id}`)
+      }
+      // Admins can see all groups
+
+      const { data, error } = await query
+
+      if (error) {
+        // If groups table doesn't exist, silently fail
+        console.log('Groups table may not exist yet:', error)
+        setGroups([])
+        return
+      }
+
+      setGroups((data || []) as Array<{ id: string; name: string; members?: Array<{ user_id: string }> }>)
+    } catch (error) {
+      console.error('Error fetching groups:', error)
+      setGroups([])
+    }
+  }
 
   useEffect(() => {
     // Close manager dropdown when clicking outside
@@ -61,16 +108,41 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
         setShowManagerDropdown(false)
         setManagerSearchTerm('')
       }
+      if (taskDropdownRef.current && !taskDropdownRef.current.contains(event.target as Node)) {
+        setShowTaskDropdown(false)
+      }
+      if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target as Node)) {
+        setShowGroupDropdown(false)
+      }
     }
 
-    if (showManagerDropdown) {
+    if (showManagerDropdown || showTaskDropdown || showGroupDropdown) {
       document.addEventListener('mousedown', handleClickOutside)
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [showManagerDropdown])
+  }, [showManagerDropdown, showTaskDropdown, showGroupDropdown])
+
+  // When groups are selected, auto-select all members of those groups
+  useEffect(() => {
+    if (selectedGroups.length > 0) {
+      const groupMemberIds = new Set<string>()
+      selectedGroups.forEach(groupId => {
+        const group = groups.find(g => g.id === groupId)
+        if (group?.members) {
+          group.members.forEach(member => {
+            groupMemberIds.add(member.user_id)
+          })
+        }
+      })
+      
+      // Add group members to selected members (merge, don't replace)
+      const newMemberIds = [...new Set([...formData.selectedMembers, ...Array.from(groupMemberIds)])]
+      setFormData({ ...formData, selectedMembers: newMemberIds })
+    }
+  }, [selectedGroups])
   
   useEffect(() => {
     // Set up real-time subscriptions for projects and project members
@@ -308,11 +380,98 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       setFormData({ ...formData, task_id: data.id })
       setNewTaskName('')
       setShowNewTaskInput(false)
+      showSuccess('Task created successfully!')
     } catch (error: any) {
         console.error('Error creating task:', error)
         showError(error.message || 'Failed to create task')
     }
   }
+
+  const handleRenameTask = async (taskId: string, newName: string) => {
+    if (!newName.trim()) {
+      setEditingTaskId(null)
+      setEditingTaskName('')
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ name: newName.trim() })
+        .eq('id', taskId)
+
+      if (error) throw error
+
+      setTasks(tasks.map(task => task.id === taskId ? { ...task, name: newName.trim() } : task))
+      setEditingTaskId(null)
+      setEditingTaskName('')
+      showSuccess('Task renamed successfully!')
+    } catch (error: any) {
+      console.error('Error renaming task:', error)
+      showError(error.message || 'Failed to rename task')
+    }
+  }
+
+  const handleDeleteTask = async (taskId: string, taskName: string) => {
+    if (!confirm(`Are you sure you want to delete the task "${taskName}"? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('id', taskId)
+
+      if (error) throw error
+
+      setTasks(tasks.filter(task => task.id !== taskId))
+      // If the deleted task was selected in the form, clear it
+      if (formData.task_id === taskId) {
+        setFormData({ ...formData, task_id: '' })
+      }
+      showSuccess('Task deleted successfully!')
+    } catch (error: any) {
+      console.error('Error deleting task:', error)
+      showError(error.message || 'Failed to delete task')
+    }
+  }
+
+  const startEditingTask = (taskId: string, currentName: string) => {
+    setEditingTaskId(taskId)
+    setEditingTaskName(currentName)
+  }
+
+  const cancelEditingTask = () => {
+    setEditingTaskId(null)
+    setEditingTaskName('')
+  }
+
+  // Reset form when modal opens/closes
+  useEffect(() => {
+    if (!showModal) {
+      setFormData({
+        name: '',
+        description: '',
+        status: 'pending',
+        task_id: '',
+        selectedProjectManagers: [],
+        selectedMembers: [],
+      })
+      setSelectedGroups([])
+      setEditingProject(null)
+    } else if (editingProject) {
+      // When editing, populate form with project data
+      setFormData({
+        name: editingProject.name,
+        description: editingProject.description || '',
+        status: editingProject.status as any,
+        task_id: (editingProject as any).task_id || '',
+        selectedProjectManagers: editingProject.project_managers || [],
+        selectedMembers: (editingProject.members || []).map((m: any) => m.profile?.id || m.id).filter(Boolean),
+      })
+    }
+  }, [showModal, editingProject])
 
   const handleSave = async () => {
     try {
@@ -482,6 +641,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
 
   const handleEdit = (project: ProjectWithDetails) => {
     setEditingProject(project)
+    setSelectedGroups([]) // Reset groups when editing
     // Handle both project_members and members structure
     const members = project.members || (project as any).project_members || []
     const memberIds = members.map((m: any) => {
@@ -851,25 +1011,139 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Task</label>
-                  <select
-                    value={formData.task_id}
-                    onChange={(e) => {
-                      setFormData({ ...formData, task_id: e.target.value })
-                      setShowNewTaskInput(e.target.value === 'new')
-                      if (e.target.value !== 'new') setNewTaskName('')
-                    }}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
-                  >
-                    <option value="">Select a task</option>
-                    {tasks.map((task) => (
-                      <option key={task.id} value={task.id}>
-                        {task.name}
-                      </option>
-                    ))}
-                    {(user.role === 'admin' || user.role === 'manager') && (
-                      <option value="new">+ Add New Task</option>
+                  <div className="relative" ref={taskDropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowTaskDropdown(!showTaskDropdown)}
+                      className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-left flex items-center justify-between"
+                    >
+                      <span>
+                        {formData.task_id
+                          ? tasks.find(t => t.id === formData.task_id)?.name || 'Select a task'
+                          : 'Select a task'}
+                      </span>
+                      <svg
+                        className={`w-4 h-4 transition-transform ${showTaskDropdown ? 'rotate-180' : ''}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    
+                    {showTaskDropdown && (
+                      <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                        <div
+                          className="px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer flex items-center justify-between"
+                          onClick={() => {
+                            setFormData({ ...formData, task_id: '' })
+                            setShowTaskDropdown(false)
+                            setShowNewTaskInput(false)
+                          }}
+                        >
+                          <span className="text-gray-700 dark:text-gray-300">Select a task</span>
+                        </div>
+                        {tasks.map((task) => (
+                          <div
+                            key={task.id}
+                            className={`px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer flex items-center justify-between group ${
+                              formData.task_id === task.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                            }`}
+                            onClick={(e) => {
+                              // Don't select if clicking on edit/delete buttons
+                              if ((e.target as HTMLElement).closest('button')) {
+                                return
+                              }
+                              setFormData({ ...formData, task_id: task.id })
+                              setShowTaskDropdown(false)
+                              setShowNewTaskInput(false)
+                            }}
+                          >
+                            {editingTaskId === task.id ? (
+                              <div className="flex items-center gap-2 w-full" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="text"
+                                  value={editingTaskName}
+                                  onChange={(e) => setEditingTaskName(e.target.value)}
+                                  onKeyPress={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleRenameTask(task.id, editingTaskName)
+                                      setShowTaskDropdown(false)
+                                    } else if (e.key === 'Escape') {
+                                      cancelEditingTask()
+                                    }
+                                  }}
+                                  className="flex-1 px-2 py-1 border border-blue-400 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 text-sm"
+                                  autoFocus
+                                />
+                                <button
+                                  onClick={() => {
+                                    handleRenameTask(task.id, editingTaskName)
+                                    setShowTaskDropdown(false)
+                                  }}
+                                  className="p-1 hover:bg-green-100 dark:hover:bg-green-800 rounded"
+                                  title="Save"
+                                >
+                                  <Check className="w-4 h-4 text-green-600 dark:text-green-400" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    cancelEditingTask()
+                                    setShowTaskDropdown(false)
+                                  }}
+                                  className="p-1 hover:bg-red-100 dark:hover:bg-red-800 rounded"
+                                  title="Cancel"
+                                >
+                                  <X className="w-4 h-4 text-red-600 dark:text-red-400" />
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <span className="text-gray-700 dark:text-gray-300 flex-1">{task.name}</span>
+                                {(user.role === 'admin' || user.role === 'manager') && (
+                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        startEditingTask(task.id, task.name)
+                                      }}
+                                      className="p-1 hover:bg-blue-100 dark:hover:bg-blue-800 rounded"
+                                      title="Rename task"
+                                    >
+                                      <Edit className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleDeleteTask(task.id, task.name)
+                                        setShowTaskDropdown(false)
+                                      }}
+                                      className="p-1 hover:bg-red-100 dark:hover:bg-red-800 rounded"
+                                      title="Delete task"
+                                    >
+                                      <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
+                                    </button>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        ))}
+                        {(user.role === 'admin' || user.role === 'manager') && (
+                          <div
+                            className="px-4 py-2 border-t border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer text-blue-600 dark:text-blue-400 font-medium"
+                            onClick={() => {
+                              setShowNewTaskInput(true)
+                              setShowTaskDropdown(false)
+                            }}
+                          >
+                            + Add New Task
+                          </div>
+                        )}
+                      </div>
                     )}
-                  </select>
+                  </div>
                   {showNewTaskInput && (
                     <div className="mt-2 flex items-center space-x-2">
                       <input
@@ -877,7 +1151,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                         value={newTaskName}
                         onChange={(e) => setNewTaskName(e.target.value)}
                         placeholder="Enter new task name"
-                        className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                         onKeyPress={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault()
@@ -1286,12 +1560,66 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
                 </p>
                 <div className="flex flex-wrap gap-2 mt-2">
                   {tasks.map((task) => (
-                    <span
+                    <div
                       key={task.id}
-                      className="px-3 py-1 bg-white dark:bg-gray-700 border border-blue-300 dark:border-blue-600 rounded-full text-xs text-blue-700 dark:text-blue-400 font-medium"
+                      className="flex items-center gap-1 px-3 py-1 bg-white dark:bg-gray-700 border border-blue-300 dark:border-blue-600 rounded-full text-xs text-blue-700 dark:text-blue-400 font-medium group"
                     >
-                      {task.name}
-                    </span>
+                      {editingTaskId === task.id ? (
+                        <>
+                          <input
+                            type="text"
+                            value={editingTaskName}
+                            onChange={(e) => setEditingTaskName(e.target.value)}
+                            onKeyPress={(e) => {
+                              if (e.key === 'Enter') {
+                                handleRenameTask(task.id, editingTaskName)
+                              } else if (e.key === 'Escape') {
+                                cancelEditingTask()
+                              }
+                            }}
+                            className="flex-1 min-w-[100px] px-2 py-0.5 border border-blue-400 rounded bg-white dark:bg-gray-800 text-blue-900 dark:text-blue-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            autoFocus
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <button
+                            onClick={() => handleRenameTask(task.id, editingTaskName)}
+                            className="p-0.5 hover:bg-blue-100 dark:hover:bg-blue-800 rounded"
+                            title="Save"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={cancelEditingTask}
+                            className="p-0.5 hover:bg-red-100 dark:hover:bg-red-800 rounded"
+                            title="Cancel"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span>{task.name}</span>
+                          {(user.role === 'admin' || user.role === 'manager') && (
+                            <>
+                              <button
+                                onClick={() => startEditingTask(task.id, task.name)}
+                                className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-blue-100 dark:hover:bg-blue-800 rounded transition-opacity"
+                                title="Rename task"
+                              >
+                                <Edit className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteTask(task.id, task.name)}
+                                className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-red-100 dark:hover:bg-red-800 rounded transition-opacity"
+                                title="Delete task"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
