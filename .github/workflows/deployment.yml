@@ -10,7 +10,7 @@ on:
 env:
   IMAGE_NAME: timeflow
   CONTAINER_NAME: timeflow-web
-  APP_PORT: 5173    
+  APP_PORT: 5173
 
 jobs:
   build-and-deploy:
