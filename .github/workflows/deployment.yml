@@ -1,0 +1,191 @@
+name: Deploy to Self-Hosted Windows Server
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  DOCKERHUB_USERNAME: akshatpareek
+  IMAGE_NAME: timeflow
+  CONTAINER_NAME: timeflow-web
+  APP_PORT: 5173
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get Git commit info
+        id: git_info
+        run: |
+          $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
+          $BRANCH = "${{ github.ref_name }}"
+          $BUILD_DATE = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+          $COMMIT_MESSAGE = "${{ github.event.head_commit.message }}"
+          $AUTHOR = "${{ github.actor }}"
+          
+          echo "SHORT_SHA=$SHORT_SHA" >> $env:GITHUB_ENV
+          echo "BRANCH=$BRANCH" >> $env:GITHUB_ENV
+          echo "BUILD_DATE=$BUILD_DATE" >> $env:GITHUB_ENV
+          echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $env:GITHUB_ENV
+          echo "AUTHOR=$AUTHOR" >> $env:GITHUB_ENV
+          echo "FULL_IMAGE=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA" >> $env:GITHUB_ENV
+          echo "LATEST_IMAGE=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest" >> $env:GITHUB_ENV
+          
+          Write-Host "========================================="
+          Write-Host "Build Information"
+          Write-Host "========================================="
+          Write-Host "Commit Hash: $SHORT_SHA"
+          Write-Host "Branch: $BRANCH"
+          Write-Host "Author: $AUTHOR"
+          Write-Host "Commit Message: $COMMIT_MESSAGE"
+          Write-Host "Build Date: $BUILD_DATE"
+          Write-Host "Image: ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA"
+          Write-Host "========================================="
+
+      - name: Login to DockerHub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          Write-Host "✅ Logged into DockerHub"
+
+      - name: Create .env file
+        run: |
+          @"
+          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          VITE_BASE_PATH=/
+          GIT_COMMIT=${{ env.SHORT_SHA }}
+          BUILD_DATE=${{ env.BUILD_DATE }}
+          "@ | Out-File -FilePath .env -Encoding utf8
+          Write-Host "✅ Created .env file"
+
+      - name: Stop existing container
+        run: |
+          Write-Host "Stopping existing container..."
+          docker stop ${{ env.CONTAINER_NAME }} 2>$null
+          docker rm ${{ env.CONTAINER_NAME }} 2>$null
+          Write-Host "✅ Container stopped and removed"
+        continue-on-error: true
+
+      - name: Build Docker image
+        run: |
+          Write-Host "Building Docker image..."
+          docker compose -f timeflow/docker-compose.yml build --no-cache
+          Write-Host "✅ Image built successfully"
+
+      - name: Tag images
+        run: |
+          Write-Host "Tagging images..."
+          docker tag ${{ env.FULL_IMAGE }} ${{ env.LATEST_IMAGE }}
+          Write-Host "✅ Images tagged:"
+          Write-Host "  - ${{ env.FULL_IMAGE }}"
+          Write-Host "  - ${{ env.LATEST_IMAGE }}"
+
+      - name: Push to DockerHub
+        run: |
+          Write-Host "Pushing images to DockerHub..."
+          docker push ${{ env.FULL_IMAGE }}
+          docker push ${{ env.LATEST_IMAGE }}
+          Write-Host "✅ Images pushed to DockerHub"
+
+      - name: Deploy container
+        run: |
+          Write-Host "Starting container..."
+          docker compose -f timeflow/docker-compose.yml up -d
+          Write-Host "✅ Container started"
+
+      - name: Wait for container startup
+        run: |
+          Write-Host "Waiting for container to be healthy..."
+          Start-Sleep -Seconds 15
+
+      - name: Health check
+        run: |
+          $maxAttempts = 20
+          $attempt = 0
+          $healthy = $false
+          
+          while ($attempt -lt $maxAttempts -and -not $healthy) {
+            try {
+              # Check main app
+              $response = Invoke-WebRequest -Uri "http://localhost:${{ env.APP_PORT }}" -UseBasicParsing -TimeoutSec 5
+              
+              if ($response.StatusCode -eq 200) {
+                Write-Host "✅ Application is responding!"
+                
+                # Try to get build info
+                try {
+                  $buildInfo = Invoke-WebRequest -Uri "http://localhost:${{ env.APP_PORT }}/build-info.txt" -UseBasicParsing
+                  Write-Host "`n📋 Build Information:"
+                  Write-Host $buildInfo.Content
+                } catch {
+                  Write-Host "⚠️ Build info endpoint not available"
+                }
+                
+                $healthy = $true
+                exit 0
+              }
+            } catch {
+              $attempt++
+              Write-Host "⏳ Attempt $attempt/$maxAttempts - Waiting for application to respond..."
+              Start-Sleep -Seconds 5
+            }
+          }
+          
+          if (-not $healthy) {
+            Write-Host "❌ Health check failed after $maxAttempts attempts"
+            docker logs ${{ env.CONTAINER_NAME }} --tail 100
+            exit 1
+          }
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          Write-Host "`n"
+          Write-Host "========================================="
+          Write-Host "✅ DEPLOYMENT SUCCESSFUL"
+          Write-Host "========================================="
+          Write-Host "Container Name: ${{ env.CONTAINER_NAME }}"
+          Write-Host "Commit Hash: ${{ env.SHORT_SHA }}"
+          Write-Host "Branch: ${{ env.BRANCH }}"
+          Write-Host "Author: ${{ env.AUTHOR }}"
+          Write-Host "Build Date: ${{ env.BUILD_DATE }}"
+          Write-Host "Local URL: http://localhost:${{ env.APP_PORT }}"
+          Write-Host "`n📦 DockerHub Images:"
+          Write-Host "  docker pull ${{ env.FULL_IMAGE }}"
+          Write-Host "  docker pull ${{ env.LATEST_IMAGE }}"
+          Write-Host "`n🐳 Container Status:"
+          docker ps --filter "name=${{ env.CONTAINER_NAME }}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}"
+          Write-Host "`n📊 Image Details:"
+          docker inspect ${{ env.FULL_IMAGE }} --format='Commit: {{index .Config.Labels "git.commit"}} | Build Date: {{index .Config.Labels "build.date"}}'
+          Write-Host "========================================="
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          Write-Host "`n❌ Deployment Failed - Container Logs:"
+          Write-Host "========================================="
+          docker logs ${{ env.CONTAINER_NAME }} --tail 100
+
+      - name: Cleanup
+        if: always()
+        run: |
+          Write-Host "Cleaning up..."
+          Remove-Item -Path .env -ErrorAction SilentlyContinue
+          docker system prune -f
+          Write-Host "✅ Cleanup complete"
+        continue-on-error: true
+
+      - name: Logout from DockerHub
+        if: always()
+        run: |
+          docker logout
+          Write-Host "✅ Logged out from DockerHub"
