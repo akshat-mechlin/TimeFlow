@@ -46,6 +46,7 @@ jobs:
       - name: Create runtime .env file
         shell: powershell
         run: |
+          # Create .env for local reference only (not used in container)
           @(
             "NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}",
             "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}",
@@ -53,6 +54,7 @@ jobs:
             "GIT_COMMIT=${{ env.SHORT_SHA }}",
             "BUILD_DATE=${{ env.BUILD_DATE }}"
           ) | Set-Content .env -Encoding utf8
+          Write-Host "Environment file created for reference"
 
       - name: Stop existing container (if any)
         shell: powershell
@@ -67,6 +69,11 @@ jobs:
         run: |
           docker build `
             -f timeflow/Dockerfile `
+            --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}" `
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" `
+            --build-arg VITE_BASE_PATH="/" `
+            --build-arg GIT_COMMIT="${{ env.SHORT_SHA }}" `
+            --build-arg BUILD_DATE="${{ env.BUILD_DATE }}" `
             -t $env:FULL_IMAGE `
             -t $env:LATEST_IMAGE `
             .
@@ -83,26 +90,52 @@ jobs:
           docker run -d `
             --name $env:CONTAINER_NAME `
             --restart unless-stopped `
-            -p ${{ env.APP_PORT }}:${{ env.APP_PORT }} `
-            --env-file .env `
+            -p ${{ env.APP_PORT }}:80 `
             $env:LATEST_IMAGE
+
+      - name: Verify container is running
+        shell: powershell
+        run: |
+          Start-Sleep 3
+          $containerStatus = docker ps --filter "name=$env:CONTAINER_NAME" --format "{{.Status}}"
+          Write-Host "Container status: $containerStatus"
+          
+          if (-not $containerStatus) {
+            Write-Error "Container is not running!"
+            docker logs $env:CONTAINER_NAME --tail 100
+            exit 1
+          }
+
+      - name: Show container logs
+        shell: powershell
+        run: |
+          Write-Host "=== Container Logs ==="
+          docker logs $env:CONTAINER_NAME --tail 50
 
       - name: Health check
         shell: powershell
         run: |
-          for ($i = 1; $i -le 20; $i++) {
+          Write-Host "Starting health check on http://localhost:${{ env.APP_PORT }}/health"
+          
+          for ($i = 1; $i -le 30; $i++) {
+            Write-Host "Attempt $i of 30..."
             try {
-              Invoke-WebRequest "http://localhost:${{ env.APP_PORT }}" -TimeoutSec 5 | Out-Null
-              Write-Host "Application is healthy"
+              $response = Invoke-WebRequest "http://localhost:${{ env.APP_PORT }}/health" -TimeoutSec 5 -UseBasicParsing
+              Write-Host "✓ Application is healthy! Status: $($response.StatusCode)"
               exit 0
             } catch {
+              Write-Host "Health check failed: $_"
+              if ($i -eq 30) {
+                Write-Host "`n=== Final Container Logs ==="
+                docker logs $env:CONTAINER_NAME --tail 100
+                Write-Host "`n=== Container Inspect ==="
+                docker inspect $env:CONTAINER_NAME
+                Write-Error "Application failed health check after 30 attempts"
+                exit 1
+              }
               Start-Sleep 5
             }
           }
-
-          Write-Error "Application failed health check"
-          docker logs $env:CONTAINER_NAME --tail 100
-          exit 1
 
       - name: Cleanup
         if: always()
