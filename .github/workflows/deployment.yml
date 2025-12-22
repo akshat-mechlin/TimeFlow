@@ -80,29 +80,37 @@ jobs:
       - name: Create .env file
         run: |
           @"
-          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          VITE_BASE_PATH=/
-          GIT_COMMIT=${{ env.SHORT_SHA }}
-          BUILD_DATE=${{ env.BUILD_DATE }}
-          "@ | Out-File -FilePath .env -Encoding utf8
-          Write-Host "Created .env file"
+NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+VITE_BASE_PATH=/
+GIT_COMMIT=${{ env.SHORT_SHA }}
+BUILD_DATE=${{ env.BUILD_DATE }}
+"@ | Out-File -FilePath .env -Encoding utf8NoBOM
+          Write-Host "Created .env file (UTF-8 without BOM)"
 
       - name: Stop existing container
         run: |
           Write-Host "Stopping existing container..."
-          docker stop ${{ env.CONTAINER_NAME }} 2>$null
-          docker rm ${{ env.CONTAINER_NAME }} 2>$null
-          Write-Host "Container stopped and removed (or didn't exist)"
-        continue-on-error: true
+          if (docker ps -a --format "{{.Names}}" | Select-String -Pattern "^${{ env.CONTAINER_NAME }}$") {
+              docker stop ${{ env.CONTAINER_NAME }}
+              docker rm ${{ env.CONTAINER_NAME }}
+              Write-Host "Container stopped and removed"
+          } else {
+              Write-Host "No existing container found"
+          }
 
       - name: Remove old images
         run: |
           Write-Host "Removing old images..."
-          docker rmi ${{ env.FULL_IMAGE }} 2>$null
-          docker rmi ${{ env.LATEST_IMAGE }} 2>$null
-          Write-Host "Old images removed (or didn't exist)"
-        continue-on-error: true
+          $images = @("${{ env.FULL_IMAGE }}", "${{ env.LATEST_IMAGE }}")
+          foreach ($img in $images) {
+              if (docker images -q $img) {
+                  docker rmi $img
+                  Write-Host "Removed image $img"
+              } else {
+                  Write-Host "Image $img does not exist, skipping"
+              }
+          }
 
       - name: Build Docker image
         run: |
