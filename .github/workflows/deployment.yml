@@ -49,7 +49,7 @@ jobs:
           Write-Host "Image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA"
           Write-Host "========================================="
 
-      - name: Logout and Login to DockerHub (Windows-safe)
+      - name: Logout and Login to DockerHub (Windows-safe with verification)
         run: |
           Write-Host "Logging out of any previous DockerHub sessions..."
           docker logout
@@ -67,6 +67,13 @@ jobs:
           
           # Remove temporary token file
           Remove-Item "token.txt"
+
+          # Verify login succeeded
+          docker info | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Docker login failed. Check DOCKERHUB_USERNAME and DOCKERHUB_TOKEN!"
+              exit 1
+          }
 
           Write-Host "Docker login completed successfully"
 
