@@ -49,16 +49,26 @@ jobs:
           Write-Host "Image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA"
           Write-Host "========================================="
 
-      - name: Logout and Login to DockerHub
+      - name: Logout and Login to DockerHub (Windows-safe)
         run: |
           Write-Host "Logging out of any previous DockerHub sessions..."
           docker logout
-          
+
           $username = "${{ secrets.DOCKERHUB_USERNAME }}"
           $token = "${{ secrets.DOCKERHUB_TOKEN }}"
+
           Write-Host "Logging into DockerHub as $username"
-          $token | docker login -u $username --password-stdin
-          Write-Host "Logged into DockerHub successfully"
+          
+          # Write token to temporary file without newline
+          Set-Content -Value $token -NoNewline -Path "token.txt"
+          
+          # Pipe token into Docker login
+          Get-Content "token.txt" | docker login -u $username --password-stdin
+          
+          # Remove temporary token file
+          Remove-Item "token.txt"
+
+          Write-Host "Docker login completed successfully"
 
       - name: Create .env file
         run: |
