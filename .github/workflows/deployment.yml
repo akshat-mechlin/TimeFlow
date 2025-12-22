@@ -38,12 +38,10 @@ jobs:
           "LATEST_IMAGE=$env:DOCKERHUB_USERNAME/${{ env.IMAGE_NAME }}:latest" | Out-File $env:GITHUB_ENV -Append
 
       - name: Login to DockerHub
-        shell: powershell
-        run: |
-          Write-Host "Logging into DockerHub..."
-          $env:DOCKERHUB_TOKEN | docker login `
-            --username $env:DOCKERHUB_USERNAME `
-            --password-stdin
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Create runtime .env file
         shell: powershell
@@ -113,4 +111,3 @@ jobs:
           Remove-Item .env -ErrorAction SilentlyContinue
           docker logout
           docker system prune -f
- 
