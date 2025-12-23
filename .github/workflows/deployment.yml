@@ -16,117 +16,133 @@ jobs:
   build-and-deploy:
     runs-on: self-hosted
 
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get Git commit info
+      - name: Set build metadata
+        shell: powershell
         run: |
           $SHORT_SHA = "${{ github.sha }}".Substring(0, 7)
-          $BRANCH = "${{ github.ref_name }}"
-          $BUILD_DATE = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
-          $AUTHOR = "${{ github.actor }}"
+          $BUILD_DATE = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
           "SHORT_SHA=$SHORT_SHA" | Out-File $env:GITHUB_ENV -Append
-          "BRANCH=$BRANCH" | Out-File $env:GITHUB_ENV -Append
           "BUILD_DATE=$BUILD_DATE" | Out-File $env:GITHUB_ENV -Append
-          "AUTHOR=$AUTHOR" | Out-File $env:GITHUB_ENV -Append
-          "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$SHORT_SHA" | Out-File $env:GITHUB_ENV -Append
-          "LATEST_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest" | Out-File $env:GITHUB_ENV -Append
+          "FULL_IMAGE=$env:DOCKERHUB_USERNAME/${{ env.IMAGE_NAME }}:$SHORT_SHA" | Out-File $env:GITHUB_ENV -Append
+          "LATEST_IMAGE=$env:DOCKERHUB_USERNAME/${{ env.IMAGE_NAME }}:latest" | Out-File $env:GITHUB_ENV -Append
 
-      # 🔍 SAFE DEBUGGING STEP
-      - name: Debug DockerHub credentials
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create runtime .env file
+        shell: powershell
         run: |
-          Write-Host "=== DockerHub Credential Debug ==="
-
-          if ([string]::IsNullOrEmpty("${{ secrets.DOCKERHUB_USERNAME }}")) {
-            Write-Error "DOCKERHUB_USERNAME is EMPTY"
-            exit 1
-          } else {
-            Write-Host "DOCKERHUB_USERNAME is set"
-            Write-Host "Username length:" "${{ secrets.DOCKERHUB_USERNAME }}".Length
-          }
-
-          if ([string]::IsNullOrEmpty("${{ secrets.DOCKERHUB_TOKEN }}")) {
-            Write-Error "DOCKERHUB_TOKEN is EMPTY"
-            exit 1
-          } else {
-            Write-Host "DOCKERHUB_TOKEN is set"
-            Write-Host "Token length:" "${{ secrets.DOCKERHUB_TOKEN }}".Length
-          }
-
-          Write-Host "Logging out of Docker..."
-          docker logout | Out-Null
-
-          Write-Host "Attempting Docker login..."
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login `
-            --username "${{ secrets.DOCKERHUB_USERNAME }}" `
-            --password-stdin
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Docker login failed"
-            exit 1
-          }
-
-          Write-Host "Docker login successful"
-          docker info | Select-String -Pattern "Username|Registry"
-
-      - name: Create .env file
-        run: |
-          $envContent = @(
+          # Create .env for local reference only (not used in container)
+          @(
             "NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}",
             "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}",
             "VITE_BASE_PATH=/",
             "GIT_COMMIT=${{ env.SHORT_SHA }}",
             "BUILD_DATE=${{ env.BUILD_DATE }}"
-          )
+          ) | Set-Content .env -Encoding utf8
+          Write-Host "Environment file created for reference"
 
-          Set-Content -Path .env -Value $envContent -Encoding utf8
-
-      - name: Stop existing container
+      - name: Stop existing container (if any)
+        shell: powershell
         run: |
           if (docker ps -a --format "{{.Names}}" | Select-String "^${{ env.CONTAINER_NAME }}$") {
-            docker stop ${{ env.CONTAINER_NAME }}
-            docker rm ${{ env.CONTAINER_NAME }}
+            docker stop ${{ env.CONTAINER_NAME }} | Out-Null
+            docker rm ${{ env.CONTAINER_NAME }} | Out-Null
           }
 
-      - name: Remove old images
+      - name: Build Docker image
+        shell: powershell
         run: |
-          docker rmi ${{ env.FULL_IMAGE }} -f 2>$null
-          docker rmi ${{ env.LATEST_IMAGE }} -f 2>$null
+          docker build `
+            -f timeflow/Dockerfile `
+            --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}" `
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" `
+            --build-arg VITE_BASE_PATH="/" `
+            --build-arg GIT_COMMIT="${{ env.SHORT_SHA }}" `
+            --build-arg BUILD_DATE="${{ env.BUILD_DATE }}" `
+            -t $env:FULL_IMAGE `
+            -t $env:LATEST_IMAGE `
+            .
 
-      - name: Build image
+      - name: Push Docker image
+        shell: powershell
         run: |
-          docker compose -f timeflow/docker-compose.yml build --no-cache
+          docker push $env:FULL_IMAGE
+          docker push $env:LATEST_IMAGE
 
-      - name: Push images
+      - name: Run container
+        shell: powershell
         run: |
-          docker push ${{ env.FULL_IMAGE }}
-          docker push ${{ env.LATEST_IMAGE }}
+          docker run -d `
+            --name $env:CONTAINER_NAME `
+            --restart unless-stopped `
+            -p ${{ env.APP_PORT }}:80 `
+            $env:LATEST_IMAGE
 
-      - name: Deploy container
+      - name: Verify container is running
+        shell: powershell
         run: |
-          docker compose -f timeflow/docker-compose.yml up -d
+          Start-Sleep 3
+          $containerStatus = docker ps --filter "name=$env:CONTAINER_NAME" --format "{{.Status}}"
+          Write-Host "Container status: $containerStatus"
+          
+          if (-not $containerStatus) {
+            Write-Error "Container is not running!"
+            docker logs $env:CONTAINER_NAME --tail 100
+            exit 1
+          }
+
+      - name: Show container logs
+        shell: powershell
+        run: |
+          Write-Host "=== Container Logs ==="
+          docker logs $env:CONTAINER_NAME --tail 50
 
       - name: Health check
+        shell: powershell
         run: |
-          $tries = 20
-          for ($i = 1; $i -le $tries; $i++) {
+          Write-Host "Starting health check on http://localhost:${{ env.APP_PORT }}/health"
+          
+          for ($i = 1; $i -le 30; $i++) {
+            Write-Host "Attempt $i of 30..."
             try {
-              Invoke-WebRequest http://localhost:${{ env.APP_PORT }} -TimeoutSec 5 | Out-Null
+              $response = Invoke-WebRequest "http://localhost:${{ env.APP_PORT }}/health" -TimeoutSec 5 -UseBasicParsing
+              Write-Host "Application is healthy! Status: $($response.StatusCode)"
               exit 0
             } catch {
+              Write-Host "Health check failed: $_"
+              if ($i -eq 30) {
+                Write-Host ""
+                Write-Host "=== Final Container Logs ==="
+                docker logs $env:CONTAINER_NAME --tail 100
+                Write-Host ""
+                Write-Host "=== Container Inspect ==="
+                docker inspect $env:CONTAINER_NAME
+                Write-Error "Application failed health check after 30 attempts"
+                exit 1
+              }
               Start-Sleep 5
             }
           }
-          docker logs ${{ env.CONTAINER_NAME }} --tail 100
-          exit 1
 
       - name: Cleanup
         if: always()
+        shell: powershell
         run: |
           Remove-Item .env -ErrorAction SilentlyContinue
-          docker system prune -f
           docker logout
+          docker system prune -f
