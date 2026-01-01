@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase, hrmsSupabase } from '../lib/supabase'
-import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw } from 'lucide-react'
+import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info } from 'lucide-react'
 import { format, parseISO, subDays, subHours, addHours } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import Loader from '../components/Loader'
@@ -61,6 +61,18 @@ export default function Attendance({ user }: AttendanceProps) {
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
   const [userDropdownPosition, setUserDropdownPosition] = useState({ top: 0, left: 0 })
+  
+  // Time entry modal states
+  const [showTimeEntryModal, setShowTimeEntryModal] = useState(false)
+  const [showConfirmationModal, setShowConfirmationModal] = useState(false)
+  const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null)
+  const [timeEntryForm, setTimeEntryForm] = useState({
+    user_id: '',
+    date: format(new Date(), 'yyyy-MM-dd'),
+    start_time: '',
+    duration: '', // Duration in hours (as string for input)
+    description: '',
+  })
 
   const IST_TIMEZONE = 'Asia/Kolkata'
   const TRACKER_RESET_HOUR = 6 // 6 AM IST
@@ -69,6 +81,14 @@ export default function Attendance({ user }: AttendanceProps) {
   useEffect(() => {
     selectedUserIdsRef.current = selectedUserIds
   }, [selectedUserIds])
+
+  // Auto-set user_id for non-admin users when modal opens
+  useEffect(() => {
+    if (showTimeEntryModal && timeEntryForm.user_id === '' && 
+        !(user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant')) {
+      setTimeEntryForm(prev => ({ ...prev, user_id: user.id }))
+    }
+  }, [showTimeEntryModal, user.id, user.role])
 
   // Calculate dropdown position when opening
   useEffect(() => {
@@ -628,6 +648,144 @@ export default function Attendance({ user }: AttendanceProps) {
     return `${hours}h ${minutes}m`
   }
 
+  const openAddTimeEntryModal = () => {
+    setEditingRecord(null)
+    // Default to current user if not admin/HR/manager/accountant
+    const defaultUserId = (user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant') ? '' : user.id
+    setTimeEntryForm({
+      user_id: defaultUserId,
+      date: format(new Date(), 'yyyy-MM-dd'),
+      start_time: '',
+      duration: '',
+      description: '',
+    })
+    setShowTimeEntryModal(true)
+  }
+
+  const openEditTimeEntryModal = (record: AttendanceRecord) => {
+    setEditingRecord(record)
+    // Pre-fill with the first time entry if available, or use clock in/out times
+    const firstEntry = record.timeEntries && record.timeEntries.length > 0 ? record.timeEntries[0] : null
+    
+    if (firstEntry) {
+      const startTime = new Date(firstEntry.start_time)
+      // Convert duration from seconds to hours (with 2 decimal places)
+      const durationHours = firstEntry.duration ? (firstEntry.duration / 3600).toFixed(2) : ''
+      
+      setTimeEntryForm({
+        user_id: record.user_id,
+        date: record.date,
+        start_time: format(startTime, "yyyy-MM-dd'T'HH:mm"),
+        duration: durationHours,
+        description: firstEntry.description || '',
+      })
+    } else if (record.clock_in_time) {
+      const clockIn = new Date(record.clock_in_time)
+      // Convert duration from seconds to hours (with 2 decimal places)
+      const durationHours = record.duration ? (record.duration / 3600).toFixed(2) : ''
+      
+      setTimeEntryForm({
+        user_id: record.user_id,
+        date: record.date,
+        start_time: format(clockIn, "yyyy-MM-dd'T'HH:mm"),
+        duration: durationHours,
+        description: '',
+      })
+    } else {
+      setTimeEntryForm({
+        user_id: record.user_id,
+        date: record.date,
+        start_time: '',
+        duration: '',
+        description: '',
+      })
+    }
+    setShowTimeEntryModal(true)
+  }
+
+  const handleSaveTimeEntry = () => {
+    // Validate first
+    if (!timeEntryForm.user_id || !timeEntryForm.date || !timeEntryForm.start_time) {
+      alert('Please fill in all required fields (User, Date, and Start Time)')
+      return
+    }
+
+    if (!timeEntryForm.duration || timeEntryForm.duration.trim() === '') {
+      alert('Please enter the duration in hours')
+      return
+    }
+
+    // Show confirmation modal instead of directly saving
+    setShowConfirmationModal(true)
+  }
+
+  const handleConfirmSaveTimeEntry = async () => {
+    try {
+      // Close confirmation modal
+      setShowConfirmationModal(false)
+
+      const startTime = new Date(timeEntryForm.start_time)
+      
+      // Convert duration from hours to seconds
+      const hours = parseFloat(timeEntryForm.duration)
+      if (isNaN(hours) || hours < 0) {
+        alert('Please enter a valid duration (must be a positive number)')
+        return
+      }
+      const duration = Math.floor(hours * 3600)
+
+      if (editingRecord && editingRecord.timeEntries && editingRecord.timeEntries.length > 0) {
+        // Update existing time entry
+        const entryId = editingRecord.timeEntries[0].id
+        
+        const { error: updateError } = await supabase
+          .from('time_entries')
+          .update({
+            start_time: startTime.toISOString(),
+            end_time: null,
+            duration: duration,
+            description: timeEntryForm.description || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', entryId)
+
+        if (updateError) throw updateError
+      } else {
+        // Create new time entry
+        const { error: insertError } = await supabase
+          .from('time_entries')
+          .insert({
+            user_id: timeEntryForm.user_id,
+            start_time: startTime.toISOString(),
+            end_time: null,
+            duration: duration,
+            description: timeEntryForm.description || null,
+          })
+
+        if (insertError) throw insertError
+      }
+
+      // Refresh attendance records
+      await fetchAttendanceRecords()
+      setShowTimeEntryModal(false)
+      setEditingRecord(null)
+      setTimeEntryForm({
+        user_id: user.id,
+        date: format(new Date(), 'yyyy-MM-dd'),
+        start_time: '',
+        duration: '',
+        description: '',
+      })
+    } catch (error: any) {
+      console.error('Error saving time entry:', error)
+      alert(`Error saving time entry: ${error.message || 'Unknown error'}`)
+    }
+  }
+
+  const handleCancelConfirmation = () => {
+    setShowConfirmationModal(false)
+  }
+
   const filteredRecords = records.filter((record) => {
     // Filter by selected users first
     if (selectedUserIds.length > 0 && !selectedUserIds.includes(record.user_id)) {
@@ -689,6 +847,25 @@ export default function Attendance({ user }: AttendanceProps) {
 
   return (
     <div className="space-y-6">
+      {/* Add New Time Entry Button - At Top */}
+      <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-1">Time Entry Management</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Add new time entries or manage existing attendance records
+            </p>
+          </div>
+          <button 
+            onClick={openAddTimeEntryModal}
+            className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium"
+          >
+            <Plus className="w-5 h-5" />
+            <span>Add New Time Entry</span>
+          </button>
+        </div>
+      </div>
+
       {/* Export Report Section - At Top */}
       {(user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant') && (
         <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
@@ -1130,18 +1307,21 @@ export default function Attendance({ user }: AttendanceProps) {
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                   <span>Project/Task</span>
                 </th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                  <span>Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12">
+                  <td colSpan={8} className="px-6 py-12">
                     <Loader size="md" text="Loading attendance records" />
                   </td>
                 </tr>
               ) : filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                  <td colSpan={8} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                     <Calendar className="w-12 h-12 mx-auto mb-4 text-white dark:text-white" />
                     <p className="text-lg font-medium mb-2">No attendance records found</p>
                     <p className="text-sm text-gray-400 dark:text-gray-500">
@@ -1262,6 +1442,52 @@ export default function Attendance({ user }: AttendanceProps) {
                           )}
                         </div>
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {(() => {
+                          const currentDate = format(new Date(), 'yyyy-MM-dd')
+                          const recordDate = record.date
+                          const isCurrentDate = recordDate === currentDate
+                          
+                          if (isCurrentDate) {
+                            return (
+                              <div className="flex items-center space-x-2">
+                                <div className="relative group">
+                                  <div className="flex items-center space-x-2 px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 rounded-lg cursor-not-allowed">
+                                    <Edit2 className="w-4 h-4" />
+                                    <span>Edit</span>
+                                  </div>
+                                  <div className="absolute right-full top-1/2 transform -translate-y-1/2 mr-2 px-3 py-2 bg-gray-900 dark:bg-gray-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg max-w-xs w-max">
+                                    <div className="whitespace-normal break-words">
+                                      You cannot update the current date attendance record
+                                    </div>
+                                    <div className="absolute left-full top-1/2 transform -translate-y-1/2 -ml-1 border-4 border-transparent border-l-gray-900 dark:border-l-gray-800"></div>
+                                  </div>
+                                </div>
+                                <div className="relative group">
+                                  <Info className="w-5 h-5 text-gray-400 dark:text-gray-500 cursor-help" />
+                                  <div className="absolute right-full top-1/2 transform -translate-y-1/2 mr-2 px-3 py-2 bg-gray-900 dark:bg-gray-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg max-w-xs w-max">
+                                    <div className="whitespace-normal break-words">
+                                      You cannot update the current date attendance record
+                                    </div>
+                                    <div className="absolute left-full top-1/2 transform -translate-y-1/2 -ml-1 border-4 border-transparent border-l-gray-900 dark:border-l-gray-800"></div>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          }
+                          
+                          return (
+                            <button
+                              onClick={() => openEditTimeEntryModal(record)}
+                              className="flex items-center space-x-2 px-3 py-2 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
+                              title="Edit attendance record"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                              <span>Edit</span>
+                            </button>
+                          )
+                        })()}
+                      </td>
                     </tr>
                   )
                 })
@@ -1270,6 +1496,218 @@ export default function Attendance({ user }: AttendanceProps) {
           </table>
         </div>
       </div>
+
+      {/* Add/Edit Time Entry Modal */}
+      {showTimeEntryModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-gray-700 backdrop-blur-lg">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-800 dark:text-white">
+                {editingRecord ? 'Edit Time Entry' : 'Add New Time Entry'}
+              </h2>
+              <button
+                onClick={() => {
+                  setShowTimeEntryModal(false)
+                  setEditingRecord(null)
+                  setTimeEntryForm({
+                    user_id: user.id,
+                    date: format(new Date(), 'yyyy-MM-dd'),
+                    start_time: '',
+                    duration: '',
+                    description: '',
+                  })
+                }}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* User Selection - Only for admins, HR, managers, accountants */}
+              {(user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant') && (
+                <div>
+                  <label htmlFor="user_id" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Employee *
+                  </label>
+                  <select
+                    id="user_id"
+                    value={timeEntryForm.user_id}
+                    onChange={(e) => setTimeEntryForm({ ...timeEntryForm, user_id: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    required
+                  >
+                    <option value="">Select Employee</option>
+                    {teamMembers.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.full_name} ({member.email})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Date */}
+              <div>
+                <label htmlFor="date" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Date *
+                </label>
+                <input
+                  type="date"
+                  id="date"
+                  value={timeEntryForm.date}
+                  onChange={(e) => setTimeEntryForm({ ...timeEntryForm, date: e.target.value })}
+                  max={format(new Date(), 'yyyy-MM-dd')}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  required
+                />
+              </div>
+
+              {/* Start Time */}
+              <div>
+                <label htmlFor="start_time" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Start Time *
+                </label>
+                <input
+                  type="datetime-local"
+                  id="start_time"
+                  value={timeEntryForm.start_time}
+                  onChange={(e) => setTimeEntryForm({ ...timeEntryForm, start_time: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  required
+                />
+              </div>
+
+              {/* Duration */}
+              <div>
+                <label htmlFor="duration" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Duration (Hours) *
+                </label>
+                <input
+                  type="number"
+                  id="duration"
+                  step="0.01"
+                  min="0"
+                  value={timeEntryForm.duration}
+                  onChange={(e) => setTimeEntryForm({ ...timeEntryForm, duration: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  placeholder="e.g., 8.5 for 8 hours 30 minutes"
+                  required
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Enter duration in hours (e.g., 8.5 = 8 hours 30 minutes). End time will be calculated automatically.
+                </p>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label htmlFor="description" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Description
+                </label>
+                <textarea
+                  id="description"
+                  value={timeEntryForm.description}
+                  onChange={(e) => setTimeEntryForm({ ...timeEntryForm, description: e.target.value })}
+                  rows={3}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  placeholder="Optional description for this time entry"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={() => {
+                    setShowTimeEntryModal(false)
+                    setEditingRecord(null)
+                    setTimeEntryForm({
+                      user_id: user.id,
+                      date: format(new Date(), 'yyyy-MM-dd'),
+                      start_time: '',
+                      duration: '',
+                      description: '',
+                    })
+                  }}
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveTimeEntry}
+                  className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all font-medium"
+                >
+                  {editingRecord ? 'Update Time Entry' : 'Create Time Entry'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal */}
+      {showConfirmationModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl p-6 max-w-md w-full mx-4 border border-gray-200 dark:border-gray-700 backdrop-blur-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+                Confirm Time Entry {editingRecord ? 'Update' : 'Creation'}
+              </h2>
+              <button
+                onClick={handleCancelConfirmation}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                <div className="flex items-start space-x-3">
+                  <div className="flex-shrink-0">
+                    <svg className="w-5 h-5 text-yellow-600 dark:text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-400 mb-2">
+                      Important: Stop Desktop Time Tracker First
+                    </h3>
+                    <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                      Before proceeding, please make sure you have stopped the desktop time tracker application to avoid any time discrepancies. Manual time entry manipulation while the tracker is running may cause data conflicts.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <p className="text-sm text-blue-800 dark:text-blue-300 font-medium mb-2">
+                  Time Entry Details:
+                </p>
+                <ul className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
+                  <li>• Date: {timeEntryForm.date ? format(parseISO(timeEntryForm.date), 'MMM d, yyyy') : '—'}</li>
+                  <li>• Start Time: {timeEntryForm.start_time ? format(new Date(timeEntryForm.start_time), 'MMM d, yyyy hh:mm a') : '—'}</li>
+                  <li>• Duration: {timeEntryForm.duration ? `${timeEntryForm.duration} hours` : '—'}</li>
+                </ul>
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={handleCancelConfirmation}
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmSaveTimeEntry}
+                  className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all font-medium"
+                >
+                  Confirm & {editingRecord ? 'Update' : 'Create'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
