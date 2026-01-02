@@ -649,6 +649,11 @@ export default function Attendance({ user }: AttendanceProps) {
   }
 
   const openAddTimeEntryModal = () => {
+    // Only allow manager and admin to add time entries
+    if (user.role !== 'manager' && user.role !== 'admin') {
+      return
+    }
+    
     setEditingRecord(null)
     // Default to current user if not admin/HR/manager/accountant
     const defaultUserId = (user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant') ? '' : user.id
@@ -663,6 +668,11 @@ export default function Attendance({ user }: AttendanceProps) {
   }
 
   const openEditTimeEntryModal = (record: AttendanceRecord) => {
+    // Only allow manager and admin to edit time entries
+    if (user.role !== 'manager' && user.role !== 'admin') {
+      return
+    }
+    
     setEditingRecord(record)
     // Pre-fill with the first time entry if available, or use clock in/out times
     const firstEntry = record.timeEntries && record.timeEntries.length > 0 ? record.timeEntries[0] : null
@@ -847,24 +857,26 @@ export default function Attendance({ user }: AttendanceProps) {
 
   return (
     <div className="space-y-6">
-      {/* Add New Time Entry Button - At Top */}
-      <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-1">Time Entry Management</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Add new time entries or manage existing attendance records
-            </p>
+      {/* Add New Time Entry Button - At Top - Only for Manager and Admin */}
+      {(user.role === 'manager' || user.role === 'admin') && (
+        <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-1">Time Entry Management</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Add new time entries or manage existing attendance records
+              </p>
+            </div>
+            <button 
+              onClick={openAddTimeEntryModal}
+              className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium"
+            >
+              <Plus className="w-5 h-5" />
+              <span>Add New Time Entry</span>
+            </button>
           </div>
-          <button 
-            onClick={openAddTimeEntryModal}
-            className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium"
-          >
-            <Plus className="w-5 h-5" />
-            <span>Add New Time Entry</span>
-          </button>
         </div>
-      </div>
+      )}
 
       {/* Export Report Section - At Top */}
       {(user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant') && (
@@ -1444,6 +1456,11 @@ export default function Attendance({ user }: AttendanceProps) {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         {(() => {
+                          // Only show edit button for manager and admin roles
+                          if (user.role !== 'manager' && user.role !== 'admin') {
+                            return <span className="text-sm text-gray-400 dark:text-gray-500">—</span>
+                          }
+                          
                           const currentDate = format(new Date(), 'yyyy-MM-dd')
                           const recordDate = record.date
                           const isCurrentDate = recordDate === currentDate
