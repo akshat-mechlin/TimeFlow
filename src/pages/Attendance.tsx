@@ -23,12 +23,14 @@ interface AttendanceRecord {
   status: 'present' | 'half_day' | 'late' | 'absent' | 'on_leave'
   duration: number // in seconds
   profile?: Profile
+  app_version?: string | null // Tracker app version
   timeEntries?: Array<{
     id: string
     start_time: string
     end_time: string | null
     duration: number | null
     description: string | null
+    app_version?: string | null
     projects?: Array<{
       project_id: string
       project_name: string
@@ -204,31 +206,32 @@ export default function Attendance({ user }: AttendanceProps) {
 
       // For Select All mode, fetch basic data first to avoid timeout
       // For specific users, fetch full nested data
+      const selectQuery = isSelectAllMode 
+        ? `id, user_id, start_time, end_time, duration, description, app_version, profile:profiles!time_entries_user_id_fkey(id, full_name, email, team)`
+        : `*,
+          profile:profiles!time_entries_user_id_fkey(*),
+          project_time_entries(
+            project_id,
+            billable,
+            projects(
+              id,
+              name,
+              task_id,
+              tasks(name)
+            )
+          ),
+          screenshots(
+            id,
+            activity_logs(
+              keystrokes,
+              mouse_movements,
+              productivity_score
+            )
+          )`
+      
       let query = supabase
         .from('time_entries')
-        .select(isSelectAllMode 
-          ? `id, user_id, start_time, end_time, duration, description, profile:profiles!time_entries_user_id_fkey(id, full_name, email, team)`
-          : `*,
-            profile:profiles!time_entries_user_id_fkey(*),
-            project_time_entries(
-              project_id,
-              billable,
-              projects(
-                id,
-                name,
-                task_id,
-                tasks(name)
-              )
-            ),
-            screenshots(
-              id,
-              activity_logs(
-                keystrokes,
-                mouse_movements,
-                productivity_score
-              )
-            )`
-        )
+        .select(selectQuery)
         .gte('start_time', queryStart.toISOString())
         .lte('start_time', queryEnd.toISOString())
         .order('start_time', { ascending: false })
@@ -264,7 +267,7 @@ export default function Attendance({ user }: AttendanceProps) {
 
       // Get all unique user IDs from time entries
       const userIds = new Set<string>()
-      const entries = (timeEntries || []) as Array<TimeEntry & { profile?: Profile }>
+      const entries = (timeEntries || []) as unknown as Array<TimeEntry & { profile?: Profile; app_version?: string | null }>
       entries.forEach((entry) => {
         if (entry.user_id) {
           userIds.add(entry.user_id)
@@ -374,7 +377,7 @@ export default function Attendance({ user }: AttendanceProps) {
                 project_id: pte.project_id,
                 project_name: pte.projects?.name || 'No Project',
                 task_name: pte.projects?.tasks?.name || null,
-              }))
+              })).filter((p: any) => p.project_id !== null && p.project_name !== 'No Project')
 
               // Calculate activity totals from screenshots (may be missing in Select All mode)
               let totalKeystrokes = 0
@@ -404,7 +407,8 @@ export default function Attendance({ user }: AttendanceProps) {
                 end_time: entry.end_time,
                 duration: entry.duration,
                 description: entry.description,
-                projects: projects.length > 0 ? projects : [{ project_id: null, project_name: 'No Project', task_name: null }],
+                app_version: entry.app_version || null,
+                projects: projects.length > 0 ? projects : [],
                 activity: {
                   totalKeystrokes,
                   totalMouseMovements,
@@ -412,6 +416,14 @@ export default function Attendance({ user }: AttendanceProps) {
                 },
               }
             })
+
+            // Get the most common app_version from all entries for this day
+            const appVersions = processedEntries.map((e) => e.app_version).filter(Boolean) as string[]
+            const mostCommonVersion = appVersions.length > 0 
+              ? appVersions.reduce((a: string, b: string, _: number, arr: string[]) => 
+                  arr.filter((v: string) => v === a).length >= arr.filter((v: string) => v === b).length ? a : b
+                )
+              : null
 
             attendanceMap.set(`${userId}-${dateStr}`, {
               id: `${userId}-${dateStr}`,
@@ -422,6 +434,7 @@ export default function Attendance({ user }: AttendanceProps) {
               status,
               duration: totalDuration,
               profile: userProfile,
+              app_version: mostCommonVersion,
               timeEntries: processedEntries,
             })
           } else {
@@ -469,12 +482,6 @@ export default function Attendance({ user }: AttendanceProps) {
         })
 
         if (userEmails.size > 0) {
-          // Fetch users from HRMS by email (case-insensitive comparison)
-          const { data: hrmsUsers } = await hrmsSupabase
-            .from('users')
-            .select('id, email')
-            .in('email', Array.from(userEmails))
-
           // Also try case-insensitive matching by fetching all users and matching manually
           // This handles cases where email casing might differ
           const { data: allHrmsUsers } = await hrmsSupabase
@@ -656,7 +663,8 @@ export default function Attendance({ user }: AttendanceProps) {
     
     setEditingRecord(null)
     // Default to current user if not admin/HR/manager/accountant
-    const defaultUserId = (user.role === 'admin' || user.role === 'hr' || user.role === 'manager' || user.role === 'accountant') ? '' : user.id
+    const canSelectUser = ['admin', 'hr', 'manager', 'accountant'].includes(user.role)
+    const defaultUserId = canSelectUser ? '' : user.id
     setTimeEntryForm({
       user_id: defaultUserId,
       date: format(new Date(), 'yyyy-MM-dd'),
@@ -815,7 +823,7 @@ export default function Attendance({ user }: AttendanceProps) {
 
   const handleExportCSV = () => {
     // Create CSV headers
-    const headers = ['Employee Name', 'Department', 'Date', 'Clock In Time', 'Status', 'Hours Worked']
+    const headers = ['Employee Name', 'Date', 'Clock In Time', 'Status', 'Hours Worked', 'Tracker Version', 'Project/Task']
     
     // Create CSV rows
     const rows = filteredRecords.map((record) => {
@@ -824,13 +832,40 @@ export default function Attendance({ user }: AttendanceProps) {
         : null
       const hoursWorked = (record.duration || 0) / 3600
       
+      // Aggregate project/task info
+      const allProjects = new Map<string, { name: string; tasks: Set<string> }>()
+      if (record.timeEntries && record.timeEntries.length > 0) {
+        record.timeEntries.forEach((entry) => {
+          if (entry.projects && entry.projects.length > 0) {
+            entry.projects.forEach((proj) => {
+              if (proj.project_id && proj.project_name && proj.project_name !== 'No Project') {
+                if (!allProjects.has(proj.project_id)) {
+                  allProjects.set(proj.project_id, { name: proj.project_name, tasks: new Set() })
+                }
+                if (proj.task_name) {
+                  allProjects.get(proj.project_id)!.tasks.add(proj.task_name)
+                }
+              }
+            })
+          }
+        })
+      }
+      
+      const projectTaskInfo = allProjects.size > 0
+        ? Array.from(allProjects.entries()).map(([_, proj]) => {
+            const tasks = Array.from(proj.tasks)
+            return tasks.length > 0 ? `${proj.name} (${tasks.join(', ')})` : proj.name
+          }).join('; ')
+        : '—'
+      
       return [
         record.profile?.full_name || 'Unknown',
-        record.profile?.team || '—',
         record.date ? format(parseISO(record.date), 'MMM d, yyyy') : '—',
         clockInIST ? format(clockInIST, 'hh:mm a') : '—',
         record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' '),
-        hoursWorked.toFixed(2) + 'h'
+        hoursWorked.toFixed(2) + 'h',
+        record.app_version ? `v${record.app_version}` : '—',
+        projectTaskInfo
       ]
     })
     
@@ -1299,9 +1334,6 @@ export default function Attendance({ user }: AttendanceProps) {
                   <span>Employee Name</span>
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
-                  <span>Department</span>
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                   <span>Date</span>
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
@@ -1315,6 +1347,9 @@ export default function Attendance({ user }: AttendanceProps) {
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                   <span>Duration</span>
+                </th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                  <span>Tracker Version</span>
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                   <span>Project/Task</span>
@@ -1357,16 +1392,18 @@ export default function Attendance({ user }: AttendanceProps) {
                   
                   if (record.timeEntries && record.timeEntries.length > 0) {
                     record.timeEntries.forEach((entry) => {
-                      entry.projects?.forEach((proj) => {
-                        if (proj.project_id) {
-                          if (!allProjects.has(proj.project_id)) {
-                            allProjects.set(proj.project_id, { name: proj.project_name, tasks: new Set() })
+                      if (entry.projects && entry.projects.length > 0) {
+                        entry.projects.forEach((proj) => {
+                          if (proj.project_id && proj.project_name && proj.project_name !== 'No Project') {
+                            if (!allProjects.has(proj.project_id)) {
+                              allProjects.set(proj.project_id, { name: proj.project_name, tasks: new Set() })
+                            }
+                            if (proj.task_name) {
+                              allProjects.get(proj.project_id)!.tasks.add(proj.task_name)
+                            }
                           }
-                          if (proj.task_name) {
-                            allProjects.get(proj.project_id)!.tasks.add(proj.task_name)
-                          }
-                        }
-                      })
+                        })
+                      }
                     })
                   }
 
@@ -1381,9 +1418,6 @@ export default function Attendance({ user }: AttendanceProps) {
                               {record.profile?.full_name || 'Unknown'}
                             </div>
                           </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-600 dark:text-gray-400">{record.profile?.team || '—'}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-600 dark:text-gray-400">
@@ -1428,6 +1462,17 @@ export default function Attendance({ user }: AttendanceProps) {
                           {formatDuration(record.duration)}
                         </div>
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                          {record.app_version ? (
+                            <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-md font-medium">
+                              v{record.app_version}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 dark:text-gray-500">—</span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-6 py-4">
                         <div className="text-sm text-gray-600 dark:text-gray-400 max-w-xs">
                           {allProjects.size > 0 ? (
@@ -1450,7 +1495,7 @@ export default function Attendance({ user }: AttendanceProps) {
                               )}
                             </div>
                           ) : (
-                            <span className="text-gray-400 dark:text-gray-500">No Project</span>
+                            <span className="text-gray-400 dark:text-gray-500">—</span>
                           )}
                         </div>
                       </td>
