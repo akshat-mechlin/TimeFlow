@@ -823,6 +823,20 @@ export default function Attendance({ user }: AttendanceProps) {
     return true
   })
 
+  // Helper function to get Monday of the week for a given date
+  const getMondayOfWeek = (date: Date): Date => {
+    const day = date.getDay()
+    const diff = date.getDate() - day + (day === 0 ? -6 : 1) // Adjust when day is Sunday
+    return new Date(date.setDate(diff))
+  }
+
+  // Helper function to get the week key (Monday date) for grouping
+  const getWeekKey = (dateStr: string): string => {
+    const date = parseISO(dateStr)
+    const monday = getMondayOfWeek(new Date(date))
+    return format(monday, 'yyyy-MM-dd')
+  }
+
   const handleExportCSV = () => {
     // Generate all dates in the range
     const allDates: string[] = []
@@ -833,6 +847,16 @@ export default function Attendance({ user }: AttendanceProps) {
       allDates.push(format(currentDate, 'yyyy-MM-dd'))
       currentDate.setDate(currentDate.getDate() + 1)
     }
+    
+    // Group dates by week (Monday-Sunday)
+    const datesByWeek = new Map<string, string[]>()
+    allDates.forEach(date => {
+      const weekKey = getWeekKey(date)
+      if (!datesByWeek.has(weekKey)) {
+        datesByWeek.set(weekKey, [])
+      }
+      datesByWeek.get(weekKey)!.push(date)
+    })
     
     // Group records by employee
     const employeeMap = new Map<string, {
@@ -868,20 +892,26 @@ export default function Attendance({ user }: AttendanceProps) {
       // Add Status and Duration sub-columns for each date
       headers.push(`${header} - Status`, `${header} - Duration`)
       
-      // Add weekly total column after every 7 days (on the 7th day)
-      if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
-        const weekStart = allDates[Math.max(0, index - 6)]
-        const weekEnd = date
-        const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
-        const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
-        headers.push(`Week Total (${weekStartFormatted} - ${weekEndFormatted})`)
+      // Add weekly total column after Sunday (end of week) or at the end
+      const dayOfWeek = format(dateObj, 'EEEE')
+      if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
+        // Find Monday and Sunday of this week
+        const weekKey = getWeekKey(date)
+        const weekDates = datesByWeek.get(weekKey) || []
+        if (weekDates.length > 0) {
+          const weekStart = weekDates[0] // Monday
+          const weekEnd = weekDates[weekDates.length - 1] // Sunday (or last day of week)
+          const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
+          const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
+          headers.push(`Week Total (${weekStartFormatted} - ${weekEndFormatted})`)
+        }
       }
     })
     
     // Create CSV rows - one row per employee
     const rows = Array.from(employeeMap.values()).map((employee) => {
       const row: string[] = [employee.name]
-      let weekTotal = 0
+      const weekTotals = new Map<string, number>() // Track totals by week key
       
       // For each date, add Status and Duration
       allDates.forEach((date, index) => {
@@ -889,6 +919,7 @@ export default function Attendance({ user }: AttendanceProps) {
         const dateObj = parseISO(date)
         const dayOfWeek = format(dateObj, 'EEEE') // Get day name
         const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
+        const weekKey = getWeekKey(date)
         
         if (record) {
           const hoursWorked = (record.duration || 0) / 3600
@@ -908,7 +939,10 @@ export default function Attendance({ user }: AttendanceProps) {
           
           // Add to week total
           if (hoursWorked > 0) {
-            weekTotal += hoursWorked
+            if (!weekTotals.has(weekKey)) {
+              weekTotals.set(weekKey, 0)
+            }
+            weekTotals.set(weekKey, weekTotals.get(weekKey)! + hoursWorked)
           }
         } else {
           // No record for this date - check if it's a weekend
@@ -919,10 +953,10 @@ export default function Attendance({ user }: AttendanceProps) {
           }
         }
         
-        // Add weekly total column after every 7 days or at the end
-        if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
+        // Add weekly total column after Sunday (end of week) or at the end
+        if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
+          const weekTotal = weekTotals.get(weekKey) || 0
           row.push(weekTotal > 0 ? `${weekTotal.toFixed(2)}h` : '—')
-          weekTotal = 0 // Reset for next week
         }
       })
       
@@ -963,6 +997,16 @@ export default function Attendance({ user }: AttendanceProps) {
       allDates.push(format(currentDate, 'yyyy-MM-dd'))
       currentDate.setDate(currentDate.getDate() + 1)
     }
+    
+    // Group dates by week (Monday-Sunday)
+    const datesByWeek = new Map<string, string[]>()
+    allDates.forEach(date => {
+      const weekKey = getWeekKey(date)
+      if (!datesByWeek.has(weekKey)) {
+        datesByWeek.set(weekKey, [])
+      }
+      datesByWeek.get(weekKey)!.push(date)
+    })
     
     // Group records by employee
     const employeeMap = new Map<string, {
@@ -1029,13 +1073,19 @@ export default function Attendance({ user }: AttendanceProps) {
       
       tableHeaders.push(`${header} - Status`, `${header} - Duration`)
       
-      // Add weekly total column after every 7 days
-      if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
-        const weekStart = allDates[Math.max(0, index - 6)]
-        const weekEnd = date
-        const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
-        const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
-        tableHeaders.push(`Week Total\n(${weekStartFormatted} - ${weekEndFormatted})`)
+      // Add weekly total column after Sunday (end of week) or at the end
+      const dayOfWeek = format(dateObj, 'EEEE')
+      if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
+        // Find Monday and Sunday of this week
+        const weekKey = getWeekKey(date)
+        const weekDates = datesByWeek.get(weekKey) || []
+        if (weekDates.length > 0) {
+          const weekStart = weekDates[0] // Monday
+          const weekEnd = weekDates[weekDates.length - 1] // Sunday (or last day of week)
+          const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
+          const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
+          tableHeaders.push(`Week Total\n(${weekStartFormatted} - ${weekEndFormatted})`)
+        }
       }
     })
     
@@ -1044,13 +1094,14 @@ export default function Attendance({ user }: AttendanceProps) {
     
     employees.forEach((employee) => {
       const row: any[] = [employee.name]
-      let weekTotal = 0
+      const weekTotals = new Map<string, number>() // Track totals by week key
       
       allDates.forEach((date, index) => {
         const record = employee.records.get(date)
         const dateObj = parseISO(date)
         const dayOfWeek = format(dateObj, 'EEEE')
         const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
+        const weekKey = getWeekKey(date)
         
         if (record) {
           const hoursWorked = (record.duration || 0) / 3600
@@ -1065,8 +1116,12 @@ export default function Attendance({ user }: AttendanceProps) {
           const durationStr = hoursWorked > 0 ? `${hoursWorked.toFixed(2)}h` : '—'
           row.push(durationStr)
           
+          // Add to week total
           if (hoursWorked > 0) {
-            weekTotal += hoursWorked
+            if (!weekTotals.has(weekKey)) {
+              weekTotals.set(weekKey, 0)
+            }
+            weekTotals.set(weekKey, weekTotals.get(weekKey)! + hoursWorked)
           }
         } else {
           if (isWeekend) {
@@ -1076,10 +1131,10 @@ export default function Attendance({ user }: AttendanceProps) {
           }
         }
         
-        // Add weekly total
-        if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
+        // Add weekly total column after Sunday (end of week) or at the end
+        if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
+          const weekTotal = weekTotals.get(weekKey) || 0
           row.push(weekTotal > 0 ? `${weekTotal.toFixed(2)}h` : '—')
-          weekTotal = 0
         }
       })
       
@@ -1098,10 +1153,12 @@ export default function Attendance({ user }: AttendanceProps) {
     const employeeNameWidth = 30
     const remainingWidth = availableWidth - employeeNameWidth
     
-    // Calculate how many week total columns we have
+    // Calculate how many week total columns we have (count Sundays and last day)
     let weekTotalCount = 0
     for (let i = 0; i < allDates.length; i++) {
-      if ((i + 1) % 7 === 0 || i === allDates.length - 1) {
+      const dateObj = parseISO(allDates[i])
+      const dayOfWeek = format(dateObj, 'EEEE')
+      if (dayOfWeek === 'Sunday' || i === allDates.length - 1) {
         weekTotalCount++
       }
     }
@@ -1118,6 +1175,7 @@ export default function Attendance({ user }: AttendanceProps) {
     }
     
     // Track which columns are week totals
+    const weekTotalColumnIndices = new Set<number>()
     let colIndex = 1
     for (let dateIndex = 0; dateIndex < allDates.length; dateIndex++) {
       // Status column
@@ -1129,6 +1187,7 @@ export default function Attendance({ user }: AttendanceProps) {
       
       // Add week total column after every 7 days
       if ((dateIndex + 1) % 7 === 0 || dateIndex === allDates.length - 1) {
+        weekTotalColumnIndices.add(colIndex)
         columnStyles[colIndex] = { cellWidth: weekTotalWidth, fontSize: 6, fontStyle: 'bold' }
         colIndex++
       }
@@ -1158,17 +1217,43 @@ export default function Attendance({ user }: AttendanceProps) {
       },
       columnStyles: columnStyles,
       didParseCell: (data: any) => {
-        // Check if this is a duration cell (even column indices after employee name: 2, 4, 6, etc.)
         const colIndex = data.column.index
-        if (colIndex > 0 && colIndex % 2 === 0) {
-          const cellValue = data.cell.text[0]
+        const cellValue = data.cell.text[0]
+        
+        // Check if this is a week total column
+        if (weekTotalColumnIndices.has(colIndex)) {
+          if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
+            const hours = parseFloat(cellValue.replace('h', ''))
+            if (!isNaN(hours) && hours < 40) {
+              // Highlight week totals < 40 hours in red
+              data.cell.styles.fillColor = [220, 53, 69] // Red color
+              data.cell.styles.textColor = [255, 255, 255]
+              data.cell.styles.fontStyle = 'bold'
+            }
+          }
+        }
+        // Check if this is a duration cell (even column indices after employee name: 2, 4, 6, etc.)
+        else if (colIndex > 0 && colIndex % 2 === 0) {
           if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
             const hours = parseFloat(cellValue.replace('h', ''))
             if (!isNaN(hours) && hours < 7.30) {
-              // Highlight in orange
-              data.cell.styles.fillColor = [orangeColor[0], orangeColor[1], orangeColor[2]]
-              data.cell.styles.textColor = [255, 255, 255]
-              data.cell.styles.fontStyle = 'bold'
+              // Find the corresponding date for this column to check if it's a weekday
+              // Column structure: 0=Employee, 1=Date1-Status, 2=Date1-Duration, 3=Date2-Status, 4=Date2-Duration, etc.
+              // Duration columns are at indices 2, 4, 6, 8... which correspond to dates at indices 0, 1, 2, 3...
+              const dateIndex = Math.floor((colIndex - 2) / 2)
+              if (dateIndex >= 0 && dateIndex < allDates.length) {
+                const date = allDates[dateIndex]
+                const dateObj = parseISO(date)
+                const dayOfWeek = format(dateObj, 'EEEE')
+                const isWeekday = dayOfWeek !== 'Saturday' && dayOfWeek !== 'Sunday'
+                
+                // Only highlight weekdays (Monday-Friday) in orange
+                if (isWeekday) {
+                  data.cell.styles.fillColor = [orangeColor[0], orangeColor[1], orangeColor[2]]
+                  data.cell.styles.textColor = [255, 255, 255]
+                  data.cell.styles.fontStyle = 'bold'
+                }
+              }
             }
           }
         }
