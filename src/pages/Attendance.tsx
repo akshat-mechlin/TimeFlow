@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase, hrmsSupabase } from '../lib/supabase'
-import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info } from 'lucide-react'
+import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info, FileText } from 'lucide-react'
 import { format, parseISO, subDays, subHours, addHours } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 type Profile = Tables<'profiles'>
 type TimeEntry = Tables<'time_entries'> & { profile?: Profile }
@@ -822,52 +824,113 @@ export default function Attendance({ user }: AttendanceProps) {
   })
 
   const handleExportCSV = () => {
-    // Create CSV headers
-    const headers = ['Employee Name', 'Date', 'Clock In Time', 'Status', 'Hours Worked', 'Tracker Version', 'Project/Task']
+    // Generate all dates in the range
+    const allDates: string[] = []
+    const currentDate = new Date(parseISO(startDate))
+    const endDateObj = parseISO(endDate)
     
-    // Create CSV rows
-    const rows = filteredRecords.map((record) => {
-      const clockInIST = record.clock_in_time 
-        ? toZonedTime(new Date(record.clock_in_time), IST_TIMEZONE)
-        : null
-      const hoursWorked = (record.duration || 0) / 3600
+    while (currentDate <= endDateObj) {
+      allDates.push(format(currentDate, 'yyyy-MM-dd'))
+      currentDate.setDate(currentDate.getDate() + 1)
+    }
+    
+    // Group records by employee
+    const employeeMap = new Map<string, {
+      name: string
+      records: Map<string, AttendanceRecord>
+    }>()
+    
+    filteredRecords.forEach((record) => {
+      const employeeId = record.user_id
+      const employeeName = record.profile?.full_name || 'Unknown'
       
-      // Aggregate project/task info
-      const allProjects = new Map<string, { name: string; tasks: Set<string> }>()
-      if (record.timeEntries && record.timeEntries.length > 0) {
-        record.timeEntries.forEach((entry) => {
-          if (entry.projects && entry.projects.length > 0) {
-            entry.projects.forEach((proj) => {
-              if (proj.project_id && proj.project_name && proj.project_name !== 'No Project') {
-                if (!allProjects.has(proj.project_id)) {
-                  allProjects.set(proj.project_id, { name: proj.project_name, tasks: new Set() })
-                }
-                if (proj.task_name) {
-                  allProjects.get(proj.project_id)!.tasks.add(proj.task_name)
-                }
-              }
-            })
-          }
+      if (!employeeMap.has(employeeId)) {
+        employeeMap.set(employeeId, {
+          name: employeeName,
+          records: new Map()
         })
       }
       
-      const projectTaskInfo = allProjects.size > 0
-        ? Array.from(allProjects.entries()).map(([_, proj]) => {
-            const tasks = Array.from(proj.tasks)
-            return tasks.length > 0 ? `${proj.name} (${tasks.join(', ')})` : proj.name
-          }).join('; ')
-        : '—'
-      
-      return [
-        record.profile?.full_name || 'Unknown',
-        record.date ? format(parseISO(record.date), 'MMM d, yyyy') : '—',
-        clockInIST ? format(clockInIST, 'hh:mm a') : '—',
-        record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' '),
-        hoursWorked.toFixed(2) + 'h',
-        record.app_version ? `v${record.app_version}` : '—',
-        projectTaskInfo
-      ]
+      employeeMap.get(employeeId)!.records.set(record.date, record)
     })
+    
+    // Create CSV headers with day name, date, and sub-columns (Status, Duration)
+    // Also add weekly total columns after every 7 days
+    const headers: string[] = ['Employee Name']
+    
+    allDates.forEach((date, index) => {
+      const dateObj = parseISO(date)
+      // Format: "9 January 2025 (Monday)" (day number, full month name, year, day name in parentheses)
+      const dayName = format(dateObj, 'EEEE') // Monday, Tuesday, etc.
+      const dateStr = format(dateObj, 'd MMMM yyyy')
+      const header = `${dateStr} (${dayName})`
+      
+      // Add Status and Duration sub-columns for each date
+      headers.push(`${header} - Status`, `${header} - Duration`)
+      
+      // Add weekly total column after every 7 days (on the 7th day)
+      if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
+        const weekStart = allDates[Math.max(0, index - 6)]
+        const weekEnd = date
+        const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
+        const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
+        headers.push(`Week Total (${weekStartFormatted} - ${weekEndFormatted})`)
+      }
+    })
+    
+    // Create CSV rows - one row per employee
+    const rows = Array.from(employeeMap.values()).map((employee) => {
+      const row: string[] = [employee.name]
+      let weekTotal = 0
+      
+      // For each date, add Status and Duration
+      allDates.forEach((date, index) => {
+        const record = employee.records.get(date)
+        const dateObj = parseISO(date)
+        const dayOfWeek = format(dateObj, 'EEEE') // Get day name
+        const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
+        
+        if (record) {
+          const hoursWorked = (record.duration || 0) / 3600
+          let status = record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' ')
+          
+          // If it's weekend and status is absent with no hours, show "Weekend" instead
+          if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
+            status = 'Weekend'
+          }
+          
+          // Add Status
+          row.push(status)
+          
+          // Add Duration
+          const durationStr = hoursWorked > 0 ? `${hoursWorked.toFixed(2)}h` : '—'
+          row.push(durationStr)
+          
+          // Add to week total
+          if (hoursWorked > 0) {
+            weekTotal += hoursWorked
+          }
+        } else {
+          // No record for this date - check if it's a weekend
+          if (isWeekend) {
+            row.push('Weekend', '—')
+          } else {
+            row.push('—', '—')
+          }
+        }
+        
+        // Add weekly total column after every 7 days or at the end
+        if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
+          row.push(weekTotal > 0 ? `${weekTotal.toFixed(2)}h` : '—')
+          weekTotal = 0 // Reset for next week
+        }
+      })
+      
+      return row
+    })
+    
+    // Sort rows by employee name
+    rows.sort((a, b) => a[0].localeCompare(b[0]))
     
     // Combine headers and rows
     const csvContent = [
@@ -888,6 +951,256 @@ export default function Attendance({ user }: AttendanceProps) {
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+  }
+
+  const handleExportPDF = () => {
+    // Generate all dates in the range
+    const allDates: string[] = []
+    const currentDate = new Date(parseISO(startDate))
+    const endDateObj = parseISO(endDate)
+    
+    while (currentDate <= endDateObj) {
+      allDates.push(format(currentDate, 'yyyy-MM-dd'))
+      currentDate.setDate(currentDate.getDate() + 1)
+    }
+    
+    // Group records by employee
+    const employeeMap = new Map<string, {
+      name: string
+      records: Map<string, AttendanceRecord>
+    }>()
+    
+    filteredRecords.forEach((record) => {
+      const employeeId = record.user_id
+      const employeeName = record.profile?.full_name || 'Unknown'
+      
+      if (!employeeMap.has(employeeId)) {
+        employeeMap.set(employeeId, {
+          name: employeeName,
+          records: new Map()
+        })
+      }
+      
+      employeeMap.get(employeeId)!.records.set(record.date, record)
+    })
+    
+    // Create PDF
+    const doc = new jsPDF('landscape', 'mm', 'a4')
+    
+    // Colors
+    const primaryColor: [number, number, number] = [41, 128, 185] // Blue
+    const headerColor: [number, number, number] = [52, 73, 94] // Dark gray
+    const orangeColor: [number, number, number] = [255, 152, 0] // Orange for < 7.30 hours
+    const lightGray: [number, number, number] = [236, 240, 241]
+    
+    // Add header with title and export info
+    doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2])
+    doc.rect(0, 0, doc.internal.pageSize.getWidth(), 30, 'F')
+    
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(20)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Attendance Report', 15, 20)
+    
+    // Export date and time
+    const exportDateTime = new Date()
+    const exportDateStr = format(exportDateTime, 'MMMM d, yyyy')
+    const exportTimeStr = format(exportDateTime, 'hh:mm:ss a')
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Exported on: ${exportDateStr} at ${exportTimeStr}`, doc.internal.pageSize.getWidth() - 15, 20, { align: 'right' })
+    
+    // Date range
+    const dateRangeStr = startDate === endDate
+      ? format(parseISO(startDate), 'MMMM d, yyyy')
+      : `${format(parseISO(startDate), 'MMMM d, yyyy')} - ${format(parseISO(endDate), 'MMMM d, yyyy')}`
+    doc.text(`Period: ${dateRangeStr}`, doc.internal.pageSize.getWidth() - 15, 25, { align: 'right' })
+    
+    // Prepare table data
+    const tableData: any[] = []
+    const tableHeaders: string[] = ['Employee Name']
+    
+    // Build headers with dates
+    allDates.forEach((date, index) => {
+      const dateObj = parseISO(date)
+      const dayName = format(dateObj, 'EEEE')
+      const dateStr = format(dateObj, 'd MMMM yyyy')
+      const header = `${dateStr} (${dayName})`
+      
+      tableHeaders.push(`${header} - Status`, `${header} - Duration`)
+      
+      // Add weekly total column after every 7 days
+      if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
+        const weekStart = allDates[Math.max(0, index - 6)]
+        const weekEnd = date
+        const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
+        const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
+        tableHeaders.push(`Week Total\n(${weekStartFormatted} - ${weekEndFormatted})`)
+      }
+    })
+    
+    // Build table rows
+    const employees = Array.from(employeeMap.values()).sort((a, b) => a.name.localeCompare(b.name))
+    
+    employees.forEach((employee) => {
+      const row: any[] = [employee.name]
+      let weekTotal = 0
+      
+      allDates.forEach((date, index) => {
+        const record = employee.records.get(date)
+        const dateObj = parseISO(date)
+        const dayOfWeek = format(dateObj, 'EEEE')
+        const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
+        
+        if (record) {
+          const hoursWorked = (record.duration || 0) / 3600
+          let status = record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' ')
+          
+          if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
+            status = 'Weekend'
+          }
+          
+          row.push(status)
+          
+          const durationStr = hoursWorked > 0 ? `${hoursWorked.toFixed(2)}h` : '—'
+          row.push(durationStr)
+          
+          if (hoursWorked > 0) {
+            weekTotal += hoursWorked
+          }
+        } else {
+          if (isWeekend) {
+            row.push('Weekend', '—')
+          } else {
+            row.push('—', '—')
+          }
+        }
+        
+        // Add weekly total
+        if ((index + 1) % 7 === 0 || index === allDates.length - 1) {
+          row.push(weekTotal > 0 ? `${weekTotal.toFixed(2)}h` : '—')
+          weekTotal = 0
+        }
+      })
+      
+      tableData.push(row)
+    })
+    
+    // Add table with autoTable
+    let startY = 40
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const availableWidth = pageWidth - 20 // 10mm margin on each side
+    
+    // Calculate column widths dynamically
+    const numDateColumns = allDates.length * 2 // Status + Duration for each date
+    
+    // Employee name gets fixed width, rest is distributed
+    const employeeNameWidth = 30
+    const remainingWidth = availableWidth - employeeNameWidth
+    
+    // Calculate how many week total columns we have
+    let weekTotalCount = 0
+    for (let i = 0; i < allDates.length; i++) {
+      if ((i + 1) % 7 === 0 || i === allDates.length - 1) {
+        weekTotalCount++
+      }
+    }
+    
+    // Distribute width: 85% for date columns, 15% for week totals
+    const dateColumnsTotal = numDateColumns
+    const weekTotalColumnsTotal = weekTotalCount
+    const dateColumnWidth = (remainingWidth * 0.85) / dateColumnsTotal
+    const weekTotalWidth = weekTotalColumnsTotal > 0 ? (remainingWidth * 0.15) / weekTotalColumnsTotal : 20
+    
+    // Build column styles
+    const columnStyles: any = {
+      0: { cellWidth: employeeNameWidth, fontStyle: 'bold', fontSize: 6 },
+    }
+    
+    // Track which columns are week totals
+    let colIndex = 1
+    for (let dateIndex = 0; dateIndex < allDates.length; dateIndex++) {
+      // Status column
+      columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
+      colIndex++
+      // Duration column
+      columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
+      colIndex++
+      
+      // Add week total column after every 7 days
+      if ((dateIndex + 1) % 7 === 0 || dateIndex === allDates.length - 1) {
+        columnStyles[colIndex] = { cellWidth: weekTotalWidth, fontSize: 6, fontStyle: 'bold' }
+        colIndex++
+      }
+    }
+    
+    autoTable(doc, {
+      head: [tableHeaders],
+      body: tableData,
+      startY: startY,
+      theme: 'striped',
+      headStyles: {
+        fillColor: [headerColor[0], headerColor[1], headerColor[2]],
+        textColor: 255,
+        fontStyle: 'bold',
+        fontSize: 6,
+        halign: 'center',
+        valign: 'middle',
+        cellPadding: 1,
+      },
+      bodyStyles: {
+        fontSize: 6,
+        textColor: [44, 62, 80],
+        cellPadding: 1,
+      },
+      alternateRowStyles: {
+        fillColor: [lightGray[0], lightGray[1], lightGray[2]],
+      },
+      columnStyles: columnStyles,
+      didParseCell: (data: any) => {
+        // Check if this is a duration cell (even column indices after employee name: 2, 4, 6, etc.)
+        const colIndex = data.column.index
+        if (colIndex > 0 && colIndex % 2 === 0) {
+          const cellValue = data.cell.text[0]
+          if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
+            const hours = parseFloat(cellValue.replace('h', ''))
+            if (!isNaN(hours) && hours < 7.30) {
+              // Highlight in orange
+              data.cell.styles.fillColor = [orangeColor[0], orangeColor[1], orangeColor[2]]
+              data.cell.styles.textColor = [255, 255, 255]
+              data.cell.styles.fontStyle = 'bold'
+            }
+          }
+        }
+      },
+      margin: { top: startY, left: 10, right: 10, bottom: 15 },
+      styles: {
+        overflow: 'linebreak',
+        cellWidth: 'auto',
+        lineWidth: 0.1,
+      },
+      tableWidth: 'wrap',
+      showHead: 'everyPage',
+      showFoot: 'never',
+    })
+    
+    // Add footer on each page
+    const pageCount = doc.getNumberOfPages()
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i)
+      doc.setFontSize(8)
+      doc.setTextColor(128, 128, 128)
+      doc.text(
+        `Page ${i} of ${pageCount} | TimeFlow Attendance Report`,
+        doc.internal.pageSize.getWidth() / 2,
+        doc.internal.pageSize.getHeight() - 10,
+        { align: 'center' }
+      )
+    }
+    
+    // Save PDF
+    const filename = `attendance-report_${format(parseISO(startDate), 'yyyy-MM-dd')}_${format(parseISO(endDate), 'yyyy-MM-dd')}.pdf`
+    doc.save(filename)
   }
 
   return (
@@ -932,43 +1245,43 @@ export default function Attendance({ user }: AttendanceProps) {
                 )}
               </p>
             </div>
-            <button 
-              onClick={handleExportCSV}
-              disabled={filteredRecords.length === 0}
-              className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Download className="w-5 h-5" />
-              <span>Export to CSV</span>
-            </button>
+            <div className="flex items-center space-x-3">
+              <button 
+                onClick={handleExportCSV}
+                disabled={filteredRecords.length === 0}
+                className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-5 h-5" />
+                <span>Export to CSV</span>
+              </button>
+              <button 
+                onClick={handleExportPDF}
+                disabled={filteredRecords.length === 0}
+                className="relative flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed group"
+              >
+                <FileText className="w-5 h-5" />
+                <span>Export to PDF</span>
+                <span className="absolute -top-2 -right-2 bg-gradient-to-r from-red-600 to-pink-600 dark:from-red-500 dark:to-pink-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg border-2 border-white dark:border-gray-800 animate-pulse group-hover:animate-none">
+                  NEW
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Filters Section */}
       <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm relative z-30">
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center space-x-4 flex-1 min-w-[300px]">
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
-              <input
-                type="text"
-                placeholder="Search Employees or Departments"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
-              />
-            </div>
-            <button
-              onClick={() => fetchAttendanceRecords()}
-              disabled={loading}
-              className="flex items-center space-x-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Refresh data"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              <span className="text-sm">Refresh</span>
-            </button>
-          </div>
-          
+        <div className="flex items-center justify-end flex-wrap gap-4">
+          <button
+            onClick={() => fetchAttendanceRecords()}
+            disabled={loading}
+            className="flex items-center space-x-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh data"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <span className="text-sm">Refresh</span>
+          </button>
         </div>
 
         {/* Date Range and User Filters */}
@@ -1435,32 +1748,65 @@ export default function Attendance({ user }: AttendanceProps) {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          {record.status === 'present' ? (
-                          <span className="inline-flex items-center space-x-1 px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 rounded-full text-sm font-medium">
-                            <CheckCircle className="w-4 h-4" />
-                            <span>Present</span>
-                          </span>
-                        ) : record.status === 'half_day' ? (
-                          <span className="inline-flex items-center space-x-1 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-400 rounded-full text-sm font-medium">
-                            <Clock className="w-4 h-4" />
-                            <span>Half Day</span>
-                          </span>
-                        ) : record.status === 'on_leave' ? (
-                          <span className="inline-flex items-center space-x-1 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-400 rounded-full text-sm font-medium">
-                            <Calendar className="w-4 h-4" />
-                            <span>On Leave</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center space-x-1 px-3 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded-full text-sm font-medium">
-                            <XCircle className="w-4 h-4" />
-                            <span>Absent</span>
-                          </span>
-                        )}
-                      </td>
+                          {(() => {
+                            // Check if it's a weekend
+                            const dateObj = record.date ? parseISO(record.date) : null
+                            const dayOfWeek = dateObj ? format(dateObj, 'EEEE') : ''
+                            const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
+                            const hoursWorked = (record.duration || 0) / 3600
+                            
+                            // Show Weekend if it's Saturday/Sunday and no time entry (absent with 0 hours)
+                            if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
+                              return (
+                                <span className="inline-flex items-center space-x-1 px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-sm font-medium">
+                                  <Calendar className="w-4 h-4" />
+                                  <span>Weekend</span>
+                                </span>
+                              )
+                            }
+                            
+                            // Otherwise show the actual status
+                            if (record.status === 'present') {
+                              return (
+                                <span className="inline-flex items-center space-x-1 px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 rounded-full text-sm font-medium">
+                                  <CheckCircle className="w-4 h-4" />
+                                  <span>Present</span>
+                                </span>
+                              )
+                            } else if (record.status === 'half_day') {
+                              return (
+                                <span className="inline-flex items-center space-x-1 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-400 rounded-full text-sm font-medium">
+                                  <Clock className="w-4 h-4" />
+                                  <span>Half Day</span>
+                                </span>
+                              )
+                            } else if (record.status === 'on_leave') {
+                              return (
+                                <span className="inline-flex items-center space-x-1 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-400 rounded-full text-sm font-medium">
+                                  <Calendar className="w-4 h-4" />
+                                  <span>On Leave</span>
+                                </span>
+                              )
+                            } else {
+                              return (
+                                <span className="inline-flex items-center space-x-1 px-3 py-1 bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400 rounded-full text-sm font-medium">
+                                  <XCircle className="w-4 h-4" />
+                                  <span>Absent</span>
+                                </span>
+                              )
+                            }
+                          })()}
+                        </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-600 dark:text-gray-400">
-                          {formatDuration(record.duration)}
-                        </div>
+                        {(() => {
+                          const hoursWorked = (record.duration || 0) / 3600
+                          const isLessThan7_5 = hoursWorked > 0 && hoursWorked < 7.5
+                          return (
+                            <div className={`text-sm ${isLessThan7_5 ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-400 px-2 py-1 rounded-md font-medium' : 'text-gray-600 dark:text-gray-400'}`}>
+                              {formatDuration(record.duration)}
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-600 dark:text-gray-400">
