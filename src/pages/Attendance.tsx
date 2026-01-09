@@ -1174,19 +1174,28 @@ export default function Attendance({ user }: AttendanceProps) {
       0: { cellWidth: employeeNameWidth, fontStyle: 'bold', fontSize: 6 },
     }
     
-    // Track which columns are week totals
+    // Track which columns are week totals and which are duration columns
+    // Must match the exact header structure
     const weekTotalColumnIndices = new Set<number>()
+    const durationColumnIndices = new Map<number, number>() // Map column index to date index
     let colIndex = 1
+    
     for (let dateIndex = 0; dateIndex < allDates.length; dateIndex++) {
+      const date = allDates[dateIndex]
+      const dateObj = parseISO(date)
+      const dayOfWeek = format(dateObj, 'EEEE')
+      
       // Status column
       columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
       colIndex++
-      // Duration column
+      
+      // Duration column - track this as a duration column
+      durationColumnIndices.set(colIndex, dateIndex)
       columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
       colIndex++
       
-      // Add week total column after every 7 days
-      if ((dateIndex + 1) % 7 === 0 || dateIndex === allDates.length - 1) {
+      // Add week total column after Sunday (end of week) or at the end
+      if (dayOfWeek === 'Sunday' || dateIndex === allDates.length - 1) {
         weekTotalColumnIndices.add(colIndex)
         columnStyles[colIndex] = { cellWidth: weekTotalWidth, fontSize: 6, fontStyle: 'bold' }
         colIndex++
@@ -1220,7 +1229,7 @@ export default function Attendance({ user }: AttendanceProps) {
         const colIndex = data.column.index
         const cellValue = data.cell.text[0]
         
-        // Check if this is a week total column
+        // First check if this is a week total column - only these should be red
         if (weekTotalColumnIndices.has(colIndex)) {
           if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
             const hours = parseFloat(cellValue.replace('h', ''))
@@ -1231,23 +1240,27 @@ export default function Attendance({ user }: AttendanceProps) {
               data.cell.styles.fontStyle = 'bold'
             }
           }
+          // Return early - don't process week total columns as duration columns
+          return
         }
-        // Check if this is a duration cell (even column indices after employee name: 2, 4, 6, etc.)
-        else if (colIndex > 0 && colIndex % 2 === 0) {
+        
+        // Check if this is a duration cell using our tracked duration column indices
+        if (durationColumnIndices.has(colIndex)) {
           if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
             const hours = parseFloat(cellValue.replace('h', ''))
+            
+            // Only process if hours < 7.30 (entries >= 7.5 should not be marked)
             if (!isNaN(hours) && hours < 7.30) {
-              // Find the corresponding date for this column to check if it's a weekday
-              // Column structure: 0=Employee, 1=Date1-Status, 2=Date1-Duration, 3=Date2-Status, 4=Date2-Duration, etc.
-              // Duration columns are at indices 2, 4, 6, 8... which correspond to dates at indices 0, 1, 2, 3...
-              const dateIndex = Math.floor((colIndex - 2) / 2)
+              // Get the date index from our map
+              const dateIndex = durationColumnIndices.get(colIndex)!
               if (dateIndex >= 0 && dateIndex < allDates.length) {
                 const date = allDates[dateIndex]
                 const dateObj = parseISO(date)
                 const dayOfWeek = format(dateObj, 'EEEE')
                 const isWeekday = dayOfWeek !== 'Saturday' && dayOfWeek !== 'Sunday'
                 
-                // Only highlight weekdays (Monday-Friday) in orange
+                // Only highlight weekdays (Monday-Friday) with < 7.30 hours in orange
+                // Entries >= 7.5 hours will not be marked (condition already checked above)
                 if (isWeekday) {
                   data.cell.styles.fillColor = [orangeColor[0], orangeColor[1], orangeColor[2]]
                   data.cell.styles.textColor = [255, 255, 255]
@@ -1255,6 +1268,7 @@ export default function Attendance({ user }: AttendanceProps) {
                 }
               }
             }
+            // If hours >= 7.5, do nothing - no highlighting
           }
         }
       },
