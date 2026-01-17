@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase, hrmsSupabase } from '../lib/supabase'
 import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info, FileText } from 'lucide-react'
-import { format, parseISO, subDays, subHours, addHours } from 'date-fns'
+import { format, parseISO, subDays, subHours, addHours, endOfDay } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
@@ -79,7 +79,7 @@ export default function Attendance({ user }: AttendanceProps) {
   })
 
   const IST_TIMEZONE = 'Asia/Kolkata'
-  const TRACKER_RESET_HOUR = 6 // 6 AM IST
+  const TRACKER_RESET_HOUR = 0 // 12 AM (midnight) IST
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -163,17 +163,16 @@ export default function Attendance({ user }: AttendanceProps) {
   }
 
   // Get attendance period for a given date in IST
-  // Period: 6 AM IST of date to 5:59:59 AM IST of next day
+  // Period: 12 AM (midnight) IST of date to 11:59:59 PM IST of same date
   const getAttendancePeriod = (dateStr: string) => {
     // Parse the date string as IST date
     const dateInIST = fromZonedTime(`${dateStr} 00:00:00`, IST_TIMEZONE)
     
-    // Start: 6 AM IST of the date
+    // Start: 12 AM (midnight) IST of the date
     const periodStart = addHours(dateInIST, TRACKER_RESET_HOUR)
     
-    // End: 5:59:59 AM IST of next day (which is 6 AM - 1 second)
-    const nextDay = addHours(dateInIST, 24)
-    const periodEnd = addHours(nextDay, TRACKER_RESET_HOUR - 1)
+    // End: 11:59:59 PM IST of the same date (end of day)
+    const periodEnd = endOfDay(dateInIST)
     
     return { periodStart, periodEnd }
   }
@@ -191,15 +190,15 @@ export default function Attendance({ user }: AttendanceProps) {
       const startIST = parseISO(startDate)
       const endIST = parseISO(endDate)
       
-      // Get the attendance period for start date (6 AM IST of start date)
+      // Get the attendance period for start date (12 AM IST of start date)
       const { periodStart: startPeriodStart } = getAttendancePeriod(startDate)
       
-      // Get the attendance period for end date (5:59:59 AM IST of next day after end date)
+      // Get the attendance period for end date (11:59:59 PM IST of end date)
       const { periodEnd: endPeriodEnd } = getAttendancePeriod(endDate)
       
       // Fetch time entries that might fall in any of these attendance periods
-      // We need to fetch a wider range to account for entries that might belong to different attendance dates
-      const queryStart = subHours(startPeriodStart, 6) // Fetch from 6 hours before to be safe
+      // Since reset is at midnight, we can use the period boundaries directly
+      const queryStart = startPeriodStart
       const queryEnd = endPeriodEnd
 
       // Determine if we're fetching for all users (Select All mode)
