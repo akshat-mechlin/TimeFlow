@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban } from 'lucide-react'
+import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, Info, AlertTriangle, BarChart3, Globe, Monitor, Activity, X } from 'lucide-react'
 import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
 import Loader from '../components/Loader'
+import Tooltip from '../components/Tooltip'
 import type { Tables } from '../types/database'
 
 type Profile = Tables<'profiles'>
@@ -29,9 +30,50 @@ interface ScreenshotWithDetails extends Screenshot {
     }>
   }
   activity_logs?: Array<{
+    id: string
     keystrokes: number
     mouse_movements: number
     productivity_score: number
+    urls: string[] | null
+    created_at: string | null
+  }>
+  screenshot_activity?: Array<{
+    id: string
+    screenshot_id: string
+    user_id: string
+    project_id: string | null
+    time_entry_id: string
+    interval_start_time: string
+    interval_end_time: string
+    interval_duration_seconds: number
+    mouse_usage_percentage: number
+    keyboard_usage_percentage: number
+    mouse_activity_details: {
+      total_clicks: number
+      scroll_events: any[]
+      active_time_ms: number
+      click_coordinates: Array<{ x: number; y: number; timestamp: string }>
+      screen_resolution: { width: number; height: number }
+      movement_duration_ms: number
+    }
+    keyboard_activity_details: {
+      key_presses: any[]
+      key_frequency: Record<string, number>
+      active_time_ms: number
+      total_keystrokes: number
+    }
+    suspicious_activity_flags: string[]
+    visited_websites: Array<{
+      url: string
+      domain: string
+      start_time: string
+      duration_seconds: number
+    }>
+    active_applications: any[]
+    device_os: string
+    app_version: string
+    created_at: string
+    updated_at: string
   }>
   imageUrl?: string
 }
@@ -63,6 +105,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
   const [userDropdownPosition, setUserDropdownPosition] = useState({ top: 0, left: 0 })
+  const [showUsageDetails, setShowUsageDetails] = useState(false)
+  const [selectedScreenshotForDetails, setSelectedScreenshotForDetails] = useState<ScreenshotWithDetails | null>(null)
 
   useEffect(() => {
     fetchTeamMembers()
@@ -228,11 +272,6 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                 tasks(name)
               )
             )
-          ),
-          activity_logs(
-            keystrokes,
-            mouse_movements,
-            productivity_score
           )
         `)
         .order('taken_at', { ascending: false })
@@ -275,10 +314,61 @@ export default function Screenshots({ user }: ScreenshotsProps) {
 
       if (error) throw error
       
+      // Fetch screenshot_activity data for all screenshots
+      const screenshotIds = (data || []).map(s => s.id)
+      let screenshotActivityMap = new Map<string, any[]>()
+      
+      if (screenshotIds.length > 0) {
+        // Try screenshot_activity table first
+        const { data: screenshotActivityData, error: screenshotActivityError } = await supabase
+          .from('screenshot_activity')
+          .select('*')
+          .in('screenshot_id', screenshotIds)
+          .order('created_at', { ascending: true })
+        
+        if (!screenshotActivityError && screenshotActivityData) {
+          // Group by screenshot_id
+          screenshotActivityData.forEach((activity: any) => {
+            const screenshotId = activity.screenshot_id
+            if (!screenshotActivityMap.has(screenshotId)) {
+              screenshotActivityMap.set(screenshotId, [])
+            }
+            screenshotActivityMap.get(screenshotId)!.push(activity)
+          })
+          console.log('Fetched screenshot_activity data:', screenshotActivityData.length, 'records')
+        } else {
+          // Fallback to activity_logs table
+          console.log('screenshot_activity table not found or error, trying activity_logs')
+          const { data: activityLogsData, error: activityLogsError } = await supabase
+            .from('activity_logs')
+            .select('*')
+            .in('screenshot_id', screenshotIds)
+            .order('created_at', { ascending: true })
+          
+          if (!activityLogsError && activityLogsData) {
+            activityLogsData.forEach((activity: any) => {
+              const screenshotId = activity.screenshot_id
+              if (!screenshotActivityMap.has(screenshotId)) {
+                screenshotActivityMap.set(screenshotId, [])
+              }
+              screenshotActivityMap.get(screenshotId)!.push(activity)
+            })
+            console.log('Fetched activity_logs data:', activityLogsData.length, 'records')
+          }
+        }
+      }
+      
       // Pre-fetch image URLs for all screenshots
       // Try to get signed URLs if public URLs don't work
       const screenshotsWithUrls = await Promise.all(
         (data || []).map(async (screenshot) => {
+          // Add screenshot_activity data to screenshot
+          const activityData = screenshotActivityMap.get(screenshot.id) || []
+          const screenshotWithActivity = {
+            ...screenshot,
+            screenshot_activity: activityData,
+            activity_logs: activityData, // Also set activity_logs for backward compatibility
+          }
           // Determine correct path: camera shots go in camera/ folder
           const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
           let finalPath = screenshot.storage_path
@@ -307,7 +397,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
             // Use the public URL we already have
           }
 
-          return { ...screenshot, imageUrl: url }
+          return { ...screenshotWithActivity, imageUrl: url }
         })
       )
       
@@ -745,14 +835,36 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                           )}
                           
                           {/* Activity Logs */}
-                          {screenshot.activity_logs && screenshot.activity_logs.length > 0 && (
+                          {((screenshot.activity_logs && screenshot.activity_logs.length > 0) || (screenshot.screenshot_activity && screenshot.screenshot_activity.length > 0)) && (
                             <div className="pt-2 border-t border-gray-200 dark:border-gray-600">
                               <div className="text-[10px] font-medium text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">Activity</div>
                               <div className="grid grid-cols-3 gap-1.5">
                                 {(() => {
-                                  const totalKeystrokes = screenshot.activity_logs.reduce((sum, log) => sum + (log.keystrokes || 0), 0)
-                                  const totalMouseMovements = screenshot.activity_logs.reduce((sum, log) => sum + (log.mouse_movements || 0), 0)
-                                  const avgProductivity = screenshot.activity_logs.reduce((sum, log) => sum + (log.productivity_score || 0), 0) / screenshot.activity_logs.length
+                                  const screenshotActivities = screenshot.screenshot_activity || []
+                                  const activityLogs = screenshot.activity_logs || []
+                                  
+                                  let totalKeystrokes = 0
+                                  let totalMouseClicks = 0
+                                  let avgProductivity = 0
+                                  
+                                  if (screenshotActivities.length > 0) {
+                                    // New schema
+                                    totalKeystrokes = screenshotActivities.reduce((sum, activity) => 
+                                      sum + (activity.keyboard_activity_details?.total_keystrokes || 0), 0
+                                    )
+                                    totalMouseClicks = screenshotActivities.reduce((sum, activity) => 
+                                      sum + (activity.mouse_activity_details?.total_clicks || 0), 0
+                                    )
+                                    // Calculate average from percentages
+                                    const totalMousePct = screenshotActivities.reduce((sum, a) => sum + (a.mouse_usage_percentage || 0), 0)
+                                    const totalKeyboardPct = screenshotActivities.reduce((sum, a) => sum + (a.keyboard_usage_percentage || 0), 0)
+                                    avgProductivity = screenshotActivities.length > 0 ? (totalMousePct + totalKeyboardPct) / screenshotActivities.length : 0
+                                  } else if (activityLogs.length > 0) {
+                                    // Old schema fallback
+                                    totalKeystrokes = activityLogs.reduce((sum, log) => sum + (log.keystrokes || 0), 0)
+                                    totalMouseClicks = activityLogs.reduce((sum, log) => sum + (log.mouse_movements || 0), 0)
+                                    avgProductivity = activityLogs.length > 0 ? activityLogs.reduce((sum, log) => sum + (log.productivity_score || 0), 0) / activityLogs.length : 0
+                                  }
                                   
                                   return (
                                     <>
@@ -765,13 +877,13 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                                           <span className="text-[9px] text-gray-500 dark:text-gray-400">keys</span>
                                         </div>
                                       )}
-                                      {totalMouseMovements > 0 && (
+                                      {totalMouseClicks > 0 && (
                                         <div className="flex flex-col items-center p-1.5 bg-gray-100 dark:bg-gray-700/50 rounded">
                                           <MousePointer className="w-3 h-3 text-gray-600 dark:text-gray-400 mb-0.5" />
                                           <span className="text-[10px] font-semibold text-gray-900 dark:text-gray-100">
-                                            {totalMouseMovements > 999 ? `${(totalMouseMovements / 1000).toFixed(1)}k` : totalMouseMovements}
+                                            {totalMouseClicks > 999 ? `${(totalMouseClicks / 1000).toFixed(1)}k` : totalMouseClicks}
                                           </span>
-                                          <span className="text-[9px] text-gray-500 dark:text-gray-400">mouse</span>
+                                          <span className="text-[9px] text-gray-500 dark:text-gray-400">clicks</span>
                                         </div>
                                       )}
                                       {avgProductivity > 0 && (
@@ -789,6 +901,159 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                               </div>
                             </div>
                           )}
+                          
+                          {/* Usage Percentages & Details - Admin Only (Always visible for admins) */}
+                          {user.role === 'admin' && (() => {
+                            // Use screenshot_activity data (new schema) or fallback to activity_logs (old schema)
+                            const screenshotActivities = screenshot.screenshot_activity || []
+                            const activityLogs = screenshot.activity_logs || []
+                            
+                            // Calculate from new schema (screenshot_activity)
+                            let mousePercentage = 0
+                            let keyboardPercentage = 0
+                            let totalMouseActivity = 0
+                            let totalKeyboardActivity = 0
+                            
+                            if (screenshotActivities.length > 0) {
+                              // New schema - use pre-calculated percentages
+                              const totalMouse = screenshotActivities.reduce((sum, activity) => sum + (activity.mouse_usage_percentage || 0), 0)
+                              const totalKeyboard = screenshotActivities.reduce((sum, activity) => sum + (activity.keyboard_usage_percentage || 0), 0)
+                              const count = screenshotActivities.length
+                              mousePercentage = count > 0 ? totalMouse / count : 0
+                              keyboardPercentage = count > 0 ? totalKeyboard / count : 0
+                              
+                              // Calculate totals for display
+                              totalMouseActivity = screenshotActivities.reduce((sum, activity) => 
+                                sum + (activity.mouse_activity_details?.total_clicks || 0) + 
+                                (activity.mouse_activity_details?.active_time_ms || 0) / 1000, 0
+                              )
+                              totalKeyboardActivity = screenshotActivities.reduce((sum, activity) => 
+                                sum + (activity.keyboard_activity_details?.total_keystrokes || 0), 0
+                              )
+                            } else if (activityLogs.length > 0) {
+                              // Old schema fallback
+                              const totalKeystrokes = activityLogs.reduce((sum, log) => {
+                                const val = typeof log?.keystrokes === 'number' ? log.keystrokes : 0
+                                return sum + val
+                              }, 0)
+                              const totalMouseMovements = activityLogs.reduce((sum, log) => {
+                                const val = typeof log?.mouse_movements === 'number' ? log.mouse_movements : 0
+                                return sum + val
+                              }, 0)
+                              const totalActivity = totalKeystrokes + totalMouseMovements
+                              mousePercentage = totalActivity > 0 ? (totalMouseMovements / totalActivity) * 100 : 0
+                              keyboardPercentage = totalActivity > 0 ? (totalKeystrokes / totalActivity) * 100 : 0
+                              totalMouseActivity = totalMouseMovements
+                              totalKeyboardActivity = totalKeystrokes
+                            }
+                            
+                            console.log('Screenshot ID:', screenshot.id, 'Activities:', screenshotActivities.length, 'Logs:', activityLogs.length)
+                            console.log('Percentages:', { mousePercentage, keyboardPercentage })
+                            
+                            const hasData = screenshotActivities.length > 0 || activityLogs.length > 0
+                            
+                            return (
+                              <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                                <div className="flex items-center justify-between text-xs mb-2">
+                                  <span className="text-gray-600 dark:text-gray-400 font-medium">Usage (Admin)</span>
+                                </div>
+                                {hasData ? (
+                                  <>
+                                    {/* Mouse Usage Progress Bar */}
+                                    <div className="mb-2">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <div className="flex items-center space-x-1">
+                                          <MousePointer className="w-3 h-3 text-blue-500" />
+                                          <span className="text-[10px] text-gray-600 dark:text-gray-400">Mouse</span>
+                                        </div>
+                                        <Tooltip
+                                          content={screenshotActivities.length > 0 
+                                            ? `Mouse: ${screenshotActivities.reduce((sum, a) => sum + (a.mouse_activity_details?.total_clicks || 0), 0)} clicks, ${(screenshotActivities.reduce((sum, a) => sum + (a.mouse_activity_details?.active_time_ms || 0), 0) / 1000).toFixed(1)}s active (${mousePercentage.toFixed(1)}%)`
+                                            : `Mouse: ${totalMouseActivity.toLocaleString()} activity (${mousePercentage.toFixed(1)}%)`}
+                                          position="top"
+                                        >
+                                          <span className="text-[10px] font-semibold text-gray-700 dark:text-gray-300 cursor-help">
+                                            {mousePercentage.toFixed(1)}%
+                                          </span>
+                                        </Tooltip>
+                                      </div>
+                                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                                        <div
+                                          className={`h-full transition-all duration-300 ${
+                                            mousePercentage >= 70 ? 'bg-green-500' :
+                                            mousePercentage >= 40 ? 'bg-blue-500' :
+                                            mousePercentage >= 20 ? 'bg-yellow-500' :
+                                            'bg-gray-400'
+                                          }`}
+                                          style={{ width: `${Math.max(mousePercentage, 2)}%` }}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    {/* Keyboard Usage Progress Bar */}
+                                    <div className="mb-2">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <div className="flex items-center space-x-1">
+                                          <Keyboard className="w-3 h-3 text-purple-500" />
+                                          <span className="text-[10px] text-gray-600 dark:text-gray-400">Keyboard</span>
+                                        </div>
+                                        <Tooltip
+                                          content={screenshotActivities.length > 0
+                                            ? `Keyboard: ${screenshotActivities.reduce((sum, a) => sum + (a.keyboard_activity_details?.total_keystrokes || 0), 0)} keystrokes, ${(screenshotActivities.reduce((sum, a) => sum + (a.keyboard_activity_details?.active_time_ms || 0), 0) / 1000).toFixed(1)}s active (${keyboardPercentage.toFixed(1)}%)`
+                                            : `Keyboard: ${totalKeyboardActivity.toLocaleString()} keystrokes (${keyboardPercentage.toFixed(1)}%)`}
+                                          position="top"
+                                        >
+                                          <span className="text-[10px] font-semibold text-gray-700 dark:text-gray-300 cursor-help">
+                                            {keyboardPercentage.toFixed(1)}%
+                                          </span>
+                                        </Tooltip>
+                                      </div>
+                                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                                        <div
+                                          className={`h-full transition-all duration-300 ${
+                                            keyboardPercentage >= 70 ? 'bg-green-500' :
+                                            keyboardPercentage >= 40 ? 'bg-purple-500' :
+                                            keyboardPercentage >= 20 ? 'bg-orange-500' :
+                                            'bg-gray-400'
+                                          }`}
+                                          style={{ width: `${Math.max(keyboardPercentage, 2)}%` }}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                        console.log('Usage Details button clicked for screenshot:', screenshot.id)
+                                        setSelectedScreenshotForDetails(screenshot)
+                                        setShowUsageDetails(true)
+                                      }}
+                                      className="mt-2 w-full px-2 py-1.5 text-[10px] font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors flex items-center justify-center space-x-1"
+                                    >
+                                      <Info className="w-3 h-3" />
+                                      <span>Usage Details</span>
+                                    </button>
+                                  </>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <p className="text-[10px] text-gray-500 dark:text-gray-400 text-center">No activity data</p>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setSelectedScreenshot(screenshot)
+                                      }}
+                                      className="w-full px-2 py-1.5 text-[10px] font-medium bg-gray-600 hover:bg-gray-700 text-white rounded-md transition-colors flex items-center justify-center space-x-1"
+                                    >
+                                      <Info className="w-3 h-3" />
+                                      <span>View Screenshot</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
                         </div>
                       </div>
                     )
@@ -965,7 +1230,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
               )}
               
               {/* Activity Logs */}
-              {selectedScreenshot.activity_logs && selectedScreenshot.activity_logs.length > 0 && (
+              {((selectedScreenshot.activity_logs && selectedScreenshot.activity_logs.length > 0) || (selectedScreenshot.screenshot_activity && selectedScreenshot.screenshot_activity.length > 0)) && (
                 <div>
                   <div className="flex items-center space-x-2 mb-2">
                     <TrendingUp className="w-4 h-4 text-gray-600 dark:text-gray-400" />
@@ -973,9 +1238,10 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                   </div>
                   <div className="grid grid-cols-3 gap-3">
                     {(() => {
-                      const totalKeystrokes = selectedScreenshot.activity_logs.reduce((sum, log) => sum + (log.keystrokes || 0), 0)
-                      const totalMouseMovements = selectedScreenshot.activity_logs.reduce((sum, log) => sum + (log.mouse_movements || 0), 0)
-                      const avgProductivity = selectedScreenshot.activity_logs.reduce((sum, log) => sum + (log.productivity_score || 0), 0) / selectedScreenshot.activity_logs.length
+                      const logs = selectedScreenshot.activity_logs || selectedScreenshot.screenshot_activity || []
+                      const totalKeystrokes = logs.reduce((sum, log) => sum + (log.keystrokes || 0), 0)
+                      const totalMouseMovements = logs.reduce((sum, log) => sum + (log.mouse_movements || 0), 0)
+                      const avgProductivity = logs.length > 0 ? logs.reduce((sum, log) => sum + (log.productivity_score || 0), 0) / logs.length : 0
                       
                       return (
                         <>
@@ -1048,6 +1314,973 @@ export default function Screenshots({ user }: ScreenshotsProps) {
           </div>
         </div>
       )}
+
+      {/* Usage Details Modal - Admin Only */}
+      {showUsageDetails && selectedScreenshotForDetails && user.role === 'admin' && (
+        <UsageDetailsModal
+          key={selectedScreenshotForDetails.id} // Force re-render when screenshot changes
+          screenshot={selectedScreenshotForDetails}
+          user={user}
+          onClose={() => {
+            console.log('Closing Usage Details modal')
+            setShowUsageDetails(false)
+            setSelectedScreenshotForDetails(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Usage Details Modal Component
+interface UsageDetailsModalProps {
+  screenshot: ScreenshotWithDetails
+  user: Profile
+  onClose: () => void
+}
+
+function UsageDetailsModal({ screenshot, user, onClose }: UsageDetailsModalProps) {
+  const [loading, setLoading] = useState(true)
+  const [detailedData, setDetailedData] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    // Reset state when screenshot changes
+    setLoading(true)
+    setDetailedData(null)
+    setError(null)
+    fetchDetailedData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenshot.id])
+
+  const fetchDetailedData = async () => {
+    try {
+      setLoading(true)
+      
+      // Calculate screenshot time interval
+      const screenshotTime = screenshot.taken_at ? new Date(screenshot.taken_at) : null
+      const timeEntry = screenshot.time_entry
+      
+      // Get the time interval for this screenshot
+      // Screenshots are typically taken every few minutes, so we'll use a window around the screenshot time
+      let intervalStart: Date
+      let intervalEnd: Date
+      
+      if (screenshotTime && timeEntry?.start_time) {
+        const entryStart = new Date(timeEntry.start_time)
+        const entryEnd = timeEntry.end_time ? new Date(timeEntry.end_time) : new Date()
+        
+        // Use a 5-minute window around the screenshot (2.5 min before and after)
+        const windowMs = 2.5 * 60 * 1000
+        intervalStart = new Date(screenshotTime.getTime() - windowMs)
+        intervalEnd = new Date(screenshotTime.getTime() + windowMs)
+        
+        // Clamp to time entry boundaries
+        if (intervalStart < entryStart) intervalStart = entryStart
+        if (intervalEnd > entryEnd) intervalEnd = entryEnd
+      } else {
+        // Fallback: use screenshot time ± 2.5 minutes
+        const windowMs = 2.5 * 60 * 1000
+        intervalStart = screenshotTime ? new Date(screenshotTime.getTime() - windowMs) : new Date()
+        intervalEnd = screenshotTime ? new Date(screenshotTime.getTime() + windowMs) : new Date()
+      }
+
+      // First, try to use screenshot_activity already fetched with the screenshot
+      let screenshotActivities = screenshot.screenshot_activity || []
+      let activityLogs = screenshot.activity_logs || []
+      
+      // If no activity data in screenshot, fetch from screenshot_activity table
+      if (screenshotActivities.length === 0) {
+        const { data: screenshotActivityData, error: screenshotActivityError } = await supabase
+          .from('screenshot_activity')
+          .select('*')
+          .eq('screenshot_id', screenshot.id)
+          .order('created_at', { ascending: true })
+
+        if (!screenshotActivityError && screenshotActivityData) {
+          screenshotActivities = screenshotActivityData
+          console.log('Fetched screenshot_activity data:', screenshotActivities.length, 'records')
+        } else {
+          console.error('Error fetching screenshot_activity:', screenshotActivityError)
+          // Fallback to activity_logs if needed
+          if (activityLogs.length === 0) {
+            const { data: activityLogsData, error: activityLogsError } = await supabase
+              .from('activity_logs')
+              .select('*')
+              .eq('screenshot_id', screenshot.id)
+              .order('created_at', { ascending: true })
+            
+            if (!activityLogsError && activityLogsData) {
+              activityLogs = activityLogsData
+              console.log('Fetched activity_logs data:', activityLogs.length, 'records')
+            }
+          }
+        }
+      }
+
+      console.log('Using screenshot_activity:', screenshotActivities.length, 'logs for screenshot:', screenshot.id)
+      console.log('Sample activity:', screenshotActivities.length > 0 ? screenshotActivities[0] : 'none')
+
+      // Process the data - use new schema if available, fallback to old schema
+      let processedData
+      if (screenshotActivities.length > 0) {
+        processedData = processScreenshotActivityData(screenshotActivities, intervalStart, intervalEnd)
+        console.log('Processed screenshot_activity data:', processedData)
+      } else if (activityLogs.length > 0) {
+        processedData = processActivityData(activityLogs, intervalStart, intervalEnd)
+        console.log('Processed activity_logs data:', processedData)
+      } else {
+        // No data available - create empty structure
+        processedData = {
+          mouseActivity: {
+            totalActiveTime: 0,
+            totalMovements: 0,
+            estimatedClicks: 0,
+            scrollActivity: 0,
+            clickCoordinates: [],
+            movementDuration: 0,
+          },
+          keyboardActivity: {
+            totalKeystrokes: 0,
+            activeDuration: 0,
+            keyFrequency: {},
+            keyPresses: [],
+          },
+          websites: [],
+          suspiciousPatterns: ['No activity data available for this screenshot'],
+          confidenceScore: 0,
+          timeInterval: {
+            start: intervalStart,
+            end: intervalEnd,
+          },
+          activeApplications: [],
+          deviceInfo: 'Unknown',
+          appVersion: 'Unknown',
+        }
+        console.log('No activity data found, using empty structure')
+      }
+      setDetailedData(processedData)
+      setError(null)
+    } catch (err) {
+      console.error('Error fetching detailed data:', err)
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
+      setError(errorMessage)
+      // Set default data structure even on error
+      setDetailedData({
+        mouseActivity: {
+          totalActiveTime: 0,
+          totalMovements: 0,
+          estimatedClicks: 0,
+          scrollActivity: 0,
+          clickCoordinates: [],
+          movementDuration: 0,
+        },
+        keyboardActivity: {
+          totalKeystrokes: 0,
+          activeDuration: 0,
+          keyFrequency: {},
+          keyPresses: [],
+        },
+        websites: [],
+        suspiciousPatterns: ['Error loading activity data'],
+        confidenceScore: 0,
+        timeInterval: {
+          start: screenshot.taken_at ? new Date(screenshot.taken_at) : new Date(),
+          end: screenshot.taken_at ? new Date(screenshot.taken_at) : new Date(),
+        },
+        error: errorMessage,
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Process new schema (screenshot_activity table)
+  const processScreenshotActivityData = (activities: any[], startTime: Date, endTime: Date) => {
+    try {
+      // Aggregate mouse activity
+      const totalMouseClicks = activities.reduce((sum, activity) => 
+        sum + (activity.mouse_activity_details?.total_clicks || 0), 0
+      )
+      const totalMouseActiveTime = activities.reduce((sum, activity) => 
+        sum + (activity.mouse_activity_details?.active_time_ms || 0), 0
+      ) / 1000 // Convert to seconds
+      const totalMouseMovementTime = activities.reduce((sum, activity) => 
+        sum + (activity.mouse_activity_details?.movement_duration_ms || 0), 0
+      ) / 1000
+      const allClickCoordinates = activities.flatMap(activity => 
+        activity.mouse_activity_details?.click_coordinates || []
+      )
+      const scrollEvents = activities.flatMap(activity => 
+        activity.mouse_activity_details?.scroll_events || []
+      )
+
+      // Aggregate keyboard activity
+      const totalKeystrokes = activities.reduce((sum, activity) => 
+        sum + (activity.keyboard_activity_details?.total_keystrokes || 0), 0
+      )
+      const totalKeyboardActiveTime = activities.reduce((sum, activity) => 
+        sum + (activity.keyboard_activity_details?.active_time_ms || 0), 0
+      ) / 1000 // Convert to seconds
+      const allKeyPresses = activities.flatMap(activity => 
+        activity.keyboard_activity_details?.key_presses || []
+      )
+      const keyFrequencyMap = new Map<string, number>()
+      activities.forEach(activity => {
+        const freq = activity.keyboard_activity_details?.key_frequency || {}
+        Object.entries(freq).forEach(([key, count]) => {
+          keyFrequencyMap.set(key, (keyFrequencyMap.get(key) || 0) + (count as number))
+        })
+      })
+
+      // Aggregate websites
+      const allWebsites = activities.flatMap(activity => 
+        (activity.visited_websites || []).map((site: any) => ({
+          url: site.url,
+          domain: site.domain || (() => {
+            try {
+              if (site.url.startsWith('file://')) return 'Local File'
+              const urlObj = new URL(site.url.startsWith('http') ? site.url : `https://${site.url}`)
+              return urlObj.hostname.replace('www.', '')
+            } catch {
+              return site.url
+            }
+          })(),
+          startTime: site.start_time,
+          duration: site.duration_seconds || 0,
+        }))
+      )
+      
+      // Group websites by domain
+      const domainMap = new Map<string, { domain: string; visitCount: number; totalDuration: number }>()
+      allWebsites.forEach(site => {
+        const domain = site.domain || 'Unknown'
+        if (!domainMap.has(domain)) {
+          domainMap.set(domain, { domain, visitCount: 0, totalDuration: 0 })
+        }
+        const entry = domainMap.get(domain)!
+        entry.visitCount++
+        entry.totalDuration += site.duration
+      })
+      
+      const websites = Array.from(domainMap.values())
+        .sort((a, b) => b.visitCount - a.visitCount)
+
+      // Aggregate suspicious flags
+      const allFlags = activities.flatMap(activity => activity.suspicious_activity_flags || [])
+      const uniqueFlags = Array.from(new Set(allFlags))
+
+      // Calculate average percentages
+      const avgMousePercentage = activities.length > 0
+        ? activities.reduce((sum, a) => sum + (a.mouse_usage_percentage || 0), 0) / activities.length
+        : 0
+      const avgKeyboardPercentage = activities.length > 0
+        ? activities.reduce((sum, a) => sum + (a.keyboard_usage_percentage || 0), 0) / activities.length
+        : 0
+      
+      // Also calculate from actual activity counts for better accuracy
+      const totalMouseCount = totalMouseClicks
+      const totalKeyboardCount = totalKeystrokes
+      const totalCount = totalMouseCount + totalKeyboardCount
+      const calculatedMousePct = totalCount > 0 ? (totalMouseCount / totalCount) * 100 : avgMousePercentage
+      const calculatedKeyboardPct = totalCount > 0 ? (totalKeyboardCount / totalCount) * 100 : avgKeyboardPercentage
+
+      // Calculate confidence score based on flags and activity
+      let confidenceScore = 100
+      confidenceScore -= uniqueFlags.length * 15
+      if (totalMouseClicks === 0 && totalKeystrokes === 0) {
+        confidenceScore -= 30
+      }
+      if (avgMousePercentage < 5 && avgKeyboardPercentage < 5) {
+        confidenceScore -= 20
+      }
+      confidenceScore = Math.max(0, Math.min(100, confidenceScore))
+
+      return {
+        mouseActivity: {
+          totalActiveTime: totalMouseActiveTime,
+          totalMovements: totalMouseClicks, // Using clicks as movements indicator
+          estimatedClicks: totalMouseClicks,
+          scrollActivity: scrollEvents.length,
+          clickCoordinates: allClickCoordinates,
+          movementDuration: totalMouseMovementTime,
+        },
+        keyboardActivity: {
+          totalKeystrokes,
+          activeDuration: totalKeyboardActiveTime,
+          keyFrequency: Object.fromEntries(keyFrequencyMap),
+          keyPresses: allKeyPresses,
+        },
+        websites,
+        suspiciousPatterns: uniqueFlags,
+        confidenceScore,
+        timeInterval: {
+          start: startTime,
+          end: endTime,
+        },
+        activeApplications: activities.flatMap(a => a.active_applications || []),
+        deviceInfo: activities[0]?.device_os || 'Unknown',
+        appVersion: activities[0]?.app_version || 'Unknown',
+        // Include pre-calculated percentages
+        mousePercentage: calculatedMousePct,
+        keyboardPercentage: calculatedKeyboardPct,
+      }
+    } catch (error) {
+      console.error('Error processing screenshot activity data:', error)
+      return {
+        mouseActivity: {
+          totalActiveTime: 0,
+          totalMovements: 0,
+          estimatedClicks: 0,
+          scrollActivity: 0,
+          clickCoordinates: [],
+          movementDuration: 0,
+        },
+        keyboardActivity: {
+          totalKeystrokes: 0,
+          activeDuration: 0,
+          keyFrequency: {},
+          keyPresses: [],
+        },
+        websites: [],
+        suspiciousPatterns: ['Error processing activity data'],
+        confidenceScore: 0,
+        timeInterval: {
+          start: startTime,
+          end: endTime,
+        },
+        activeApplications: [],
+        deviceInfo: 'Unknown',
+        appVersion: 'Unknown',
+      }
+    }
+  }
+
+  // Process old schema (activity_logs table) - kept for backward compatibility
+  const processActivityData = (logs: any[], startTime: Date, endTime: Date) => {
+    try {
+      // Mouse Activity
+      const totalMouseMovements = logs.reduce((sum, log) => {
+        const movements = typeof log.mouse_movements === 'number' ? log.mouse_movements : 0
+        return sum + movements
+      }, 0)
+      const totalKeystrokes = logs.reduce((sum, log) => {
+        const keystrokes = typeof log.keystrokes === 'number' ? log.keystrokes : 0
+        return sum + keystrokes
+      }, 0)
+    
+      // Estimate mouse active time (assuming each movement takes ~0.1 seconds)
+      const mouseActiveTime = totalMouseMovements * 0.1
+      
+      // Estimate keyboard active time (assuming average typing speed of 5 chars/second)
+      const keyboardActiveTime = totalKeystrokes / 5
+      
+      // Extract URLs from activity logs
+      const allUrls = logs
+        .flatMap(log => {
+          if (Array.isArray(log.urls)) {
+            return log.urls
+          }
+          return []
+        })
+        .filter((url): url is string => typeof url === 'string' && url.length > 0)
+      
+      // Parse domains from URLs
+      const domainMap = new Map<string, number>()
+      allUrls.forEach(url => {
+        try {
+          const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`)
+          const domain = urlObj.hostname.replace('www.', '')
+          domainMap.set(domain, (domainMap.get(domain) || 0) + 1)
+        } catch {
+          // Invalid URL, skip
+        }
+      })
+      
+      const websites = Array.from(domainMap.entries())
+        .map(([domain, count]) => ({
+          domain,
+          visitCount: count,
+          // Estimate time per visit (rough approximation)
+          estimatedTime: count * 30 // 30 seconds per visit estimate
+        }))
+        .sort((a, b) => b.visitCount - a.visitCount)
+
+      // Detect suspicious patterns
+      const suspiciousPatterns = detectSuspiciousPatterns(logs, totalMouseMovements, totalKeystrokes)
+
+      // Calculate confidence score
+      const confidenceScore = calculateConfidenceScore(logs, totalMouseMovements, totalKeystrokes, suspiciousPatterns)
+
+      return {
+        mouseActivity: {
+          totalActiveTime: mouseActiveTime,
+          totalMovements: totalMouseMovements,
+          estimatedClicks: Math.floor(totalMouseMovements / 10), // Rough estimate
+          scrollActivity: Math.floor(totalMouseMovements / 50), // Rough estimate
+        },
+        keyboardActivity: {
+          totalKeystrokes,
+          activeDuration: keyboardActiveTime,
+          // Key frequency would require more detailed data
+          keyFrequency: {},
+        },
+        websites,
+        suspiciousPatterns,
+        confidenceScore,
+        timeInterval: {
+          start: startTime,
+          end: endTime,
+        },
+      }
+    } catch (error) {
+      console.error('Error processing activity data:', error)
+      // Return default structure on error
+      return {
+        mouseActivity: {
+          totalActiveTime: 0,
+          totalMovements: 0,
+          estimatedClicks: 0,
+          scrollActivity: 0,
+        },
+        keyboardActivity: {
+          totalKeystrokes: 0,
+          activeDuration: 0,
+          keyFrequency: {},
+        },
+        websites: [],
+        suspiciousPatterns: ['Error processing activity data'],
+        confidenceScore: 0,
+        timeInterval: {
+          start: startTime,
+          end: endTime,
+        },
+      }
+    }
+  }
+
+  const detectSuspiciousPatterns = (logs: any[], mouseMovements: number, keystrokes: number) => {
+    const patterns: string[] = []
+    
+    // Check for minimal activity
+    if (mouseMovements < 10 && keystrokes < 50) {
+      patterns.push('Very low activity detected')
+    }
+    
+    // Check for repetitive patterns (if we had more detailed data)
+    // For now, check if activity is too uniform
+    if (logs.length > 0) {
+      const avgKeystrokes = keystrokes / logs.length
+      const avgMouse = mouseMovements / logs.length
+      
+      // Check if all logs have similar values (suspicious)
+      const keystrokeVariance = logs.reduce((sum, log) => {
+        const diff = (log.keystrokes || 0) - avgKeystrokes
+        return sum + (diff * diff)
+      }, 0) / logs.length
+      
+      if (keystrokeVariance < 1 && keystrokes > 0) {
+        patterns.push('Repetitive keystroke pattern detected')
+      }
+    }
+    
+    // Check for inactivity bypass (very low productivity with high activity)
+    if (logs.length > 0) {
+      const avgProductivity = logs.reduce((sum, log) => sum + (log.productivity_score || 0), 0) / logs.length
+      if (avgProductivity < 20 && (mouseMovements > 100 || keystrokes > 200)) {
+        patterns.push('Possible inactivity bypass detected')
+      }
+    }
+    
+    // Check for artificial mouse movement (too many movements with low keystrokes)
+    if (mouseMovements > keystrokes * 5 && mouseMovements > 200) {
+      patterns.push('Artificial mouse movement pattern detected')
+    }
+    
+    return patterns
+  }
+
+  const calculateConfidenceScore = (
+    logs: any[],
+    mouseMovements: number,
+    keystrokes: number,
+    suspiciousPatterns: string[]
+  ): number => {
+    let score = 100
+    
+    // Deduct points for suspicious patterns
+    score -= suspiciousPatterns.length * 15
+    
+    // Deduct for very low activity
+    if (mouseMovements < 10 && keystrokes < 50) {
+      score -= 20
+    }
+    
+    // Deduct for low productivity
+    if (logs.length > 0) {
+      const avgProductivity = logs.reduce((sum, log) => sum + (log.productivity_score || 0), 0) / logs.length
+      if (avgProductivity < 30) {
+        score -= 15
+      }
+    }
+    
+    // Ensure score is between 0 and 100
+    return Math.max(0, Math.min(100, score))
+  }
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+        <div className="bg-white dark:bg-gray-800 rounded-xl p-8">
+          <Loader size="lg" text="Loading usage details..." />
+        </div>
+      </div>
+    )
+  }
+
+  // Show error state if there's an error and no data
+  if (error && !detailedData) {
+    return (
+      <div
+        className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            onClose()
+          }
+        }}
+      >
+        <div
+          className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="p-6">
+            <div className="flex items-center space-x-3 mb-4">
+              <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+              <h2 className="text-xl font-bold text-gray-800 dark:text-white">Unable to Load Data</h2>
+            </div>
+            <p className="text-gray-700 dark:text-gray-300 mb-2">
+              There was an error loading the usage details.
+            </p>
+            {error && (
+              <p className="text-sm text-red-600 dark:text-red-400 mb-6">
+                Error: {error}
+              </p>
+            )}
+            <button
+              onClick={onClose}
+              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // If no data after loading, show empty state
+  if (!loading && !detailedData) {
+    return (
+      <div
+        className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            onClose()
+          }
+        }}
+      >
+        <div
+          className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="p-6">
+            <div className="flex items-center space-x-3 mb-4">
+              <Info className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+              <h2 className="text-xl font-bold text-gray-800 dark:text-white">No Data Available</h2>
+            </div>
+            <p className="text-gray-700 dark:text-gray-300 mb-6">
+              No activity data is available for this screenshot.
+            </p>
+            <button
+              onClick={onClose}
+              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Safely extract data with defaults to prevent crashes
+  const mouseActivity = detailedData?.mouseActivity || {
+    totalActiveTime: 0,
+    totalMovements: 0,
+    estimatedClicks: 0,
+    scrollActivity: 0,
+  }
+  const keyboardActivity = detailedData?.keyboardActivity || {
+    totalKeystrokes: 0,
+    activeDuration: 0,
+    keyFrequency: {},
+  }
+  const websites = detailedData?.websites || []
+  const suspiciousPatterns = detailedData?.suspiciousPatterns || []
+  const confidenceScore = detailedData?.confidenceScore || 0
+  const timeInterval = detailedData?.timeInterval || {
+    start: screenshot.taken_at ? new Date(screenshot.taken_at) : new Date(),
+    end: screenshot.taken_at ? new Date(screenshot.taken_at) : new Date(),
+  }
+
+  // Calculate percentages - prefer using clicks/keystrokes ratio, or use pre-calculated if available
+  const totalMouseActivity = (mouseActivity?.estimatedClicks || mouseActivity?.totalMovements || 0)
+  const totalKeyboardActivity = (keyboardActivity?.totalKeystrokes || 0)
+  const totalActivity = totalMouseActivity + totalKeyboardActivity
+  
+  let mousePercentage = 0
+  let keyboardPercentage = 0
+  
+  if (totalActivity > 0) {
+    mousePercentage = (totalMouseActivity / totalActivity) * 100
+    keyboardPercentage = (totalKeyboardActivity / totalActivity) * 100
+  } else if (detailedData?.mousePercentage !== undefined && detailedData?.keyboardPercentage !== undefined) {
+    // Use pre-calculated percentages if available
+    mousePercentage = detailedData.mousePercentage
+    keyboardPercentage = detailedData.keyboardPercentage
+  }
+
+  // Ensure we have data before rendering main content
+  if (!detailedData) {
+    // Should have been caught by earlier checks, but just in case
+    return (
+      <div
+        className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[9999] p-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            onClose()
+          }
+        }}
+      >
+        <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full shadow-2xl p-6">
+          <p className="text-gray-700 dark:text-gray-300">Loading data...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[9999] p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose()
+        }
+      }}
+      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
+    >
+      <div
+        className="bg-white dark:bg-gray-800 rounded-xl max-w-7xl w-full max-h-[95vh] overflow-y-auto shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+        style={{ position: 'relative' }}
+      >
+        {/* Header */}
+        <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-6 z-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Usage Details</h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                {screenshot.taken_at
+                  ? format(new Date(screenshot.taken_at), 'MMM d, yyyy • h:mm:ss a')
+                  : '—'}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                Interval: {timeInterval?.start ? format(new Date(timeInterval.start), 'h:mm:ss a') : '—'} - {timeInterval?.end ? format(new Date(timeInterval.end), 'h:mm:ss a') : '—'}
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              title="Close"
+            >
+              <X className="w-6 h-6 text-gray-600 dark:text-gray-400" />
+            </button>
+          </div>
+        </div>
+        
+        {/* Content */}
+        <div className="p-6 space-y-6">
+          {/* Usage Overview with Progress Bars */}
+          <div className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-lg p-6 border border-blue-200 dark:border-blue-800">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Usage Overview</h3>
+            
+            {/* Mouse Usage Progress Bar */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center space-x-2">
+                  <MousePointer className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Mouse Usage</span>
+                </div>
+                <Tooltip
+                  content={`Mouse Activity: ${mouseActivity.estimatedClicks || mouseActivity.totalMovements || 0} clicks | ${mouseActivity.totalActiveTime.toFixed(1)}s active time | ${mouseActivity.scrollActivity || 0} scroll events | ${mouseActivity.movementDuration ? mouseActivity.movementDuration.toFixed(1) : 0}s movement`}
+                  position="top"
+                >
+                  <span className="text-sm font-bold text-gray-800 dark:text-white">
+                    {mousePercentage.toFixed(1)}%
+                  </span>
+                </Tooltip>
+              </div>
+              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-6 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-500 flex items-center justify-end pr-2 ${
+                    mousePercentage >= 70 ? 'bg-gradient-to-r from-green-500 to-green-600' :
+                    mousePercentage >= 40 ? 'bg-gradient-to-r from-blue-500 to-blue-600' :
+                    mousePercentage >= 20 ? 'bg-gradient-to-r from-yellow-500 to-yellow-600' :
+                    'bg-gradient-to-r from-gray-400 to-gray-500'
+                  }`}
+                  style={{ width: `${Math.max(mousePercentage, 2)}%` }}
+                >
+                  {mousePercentage > 10 && (
+                    <span className="text-xs font-semibold text-white">
+                      {(mouseActivity.estimatedClicks || mouseActivity.totalMovements || 0) > 0 ? (mouseActivity.estimatedClicks || mouseActivity.totalMovements || 0).toLocaleString() : '0'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {mousePercentage <= 10 && (mouseActivity.estimatedClicks || mouseActivity.totalMovements || 0) > 0 && (
+                <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 text-right">
+                  {(mouseActivity.estimatedClicks || mouseActivity.totalMovements || 0).toLocaleString()} clicks
+                </div>
+              )}
+            </div>
+
+            {/* Keyboard Usage Progress Bar */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center space-x-2">
+                  <Keyboard className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Keyboard Usage</span>
+                </div>
+                <Tooltip
+                  content={`Keyboard Activity: ${keyboardActivity.totalKeystrokes.toLocaleString()} keystrokes | ${keyboardActivity.activeDuration.toFixed(1)}s active duration | ${keyboardActivity.activeDuration > 0 ? (keyboardActivity.totalKeystrokes / keyboardActivity.activeDuration).toFixed(1) : '0'} keys/second typing speed`}
+                  position="top"
+                >
+                  <span className="text-sm font-bold text-gray-800 dark:text-white">
+                    {keyboardPercentage.toFixed(1)}%
+                  </span>
+                </Tooltip>
+              </div>
+              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-6 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-500 flex items-center justify-end pr-2 ${
+                    keyboardPercentage >= 70 ? 'bg-gradient-to-r from-green-500 to-green-600' :
+                    keyboardPercentage >= 40 ? 'bg-gradient-to-r from-purple-500 to-purple-600' :
+                    keyboardPercentage >= 20 ? 'bg-gradient-to-r from-orange-500 to-orange-600' :
+                    'bg-gradient-to-r from-gray-400 to-gray-500'
+                  }`}
+                  style={{ width: `${Math.max(keyboardPercentage, 2)}%` }}
+                >
+                  {keyboardPercentage > 10 && (
+                    <span className="text-xs font-semibold text-white">
+                      {keyboardActivity.totalKeystrokes > 0 ? keyboardActivity.totalKeystrokes.toLocaleString() : '0'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {keyboardPercentage <= 10 && keyboardActivity.totalKeystrokes > 0 && (
+                <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 text-right">
+                  {keyboardActivity.totalKeystrokes.toLocaleString()} keystrokes
+                </div>
+              )}
+            </div>
+
+            {/* Legend */}
+            <div className="mt-4 pt-4 border-t border-gray-300 dark:border-gray-600">
+              <div className="flex items-center justify-center space-x-4 text-xs text-gray-600 dark:text-gray-400">
+                <div className="flex items-center space-x-1">
+                  <div className="w-3 h-3 rounded bg-green-500"></div>
+                  <span>High (≥70%)</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <div className="w-3 h-3 rounded bg-blue-500"></div>
+                  <span>Medium (40-69%)</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <div className="w-3 h-3 rounded bg-yellow-500"></div>
+                  <span>Low (20-39%)</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <div className="w-3 h-3 rounded bg-gray-400"></div>
+                  <span>Minimal (&lt;20%)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* System Flags & Insights */}
+          <div className="bg-gradient-to-br from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 rounded-lg p-4 border border-yellow-200 dark:border-yellow-800">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-2">
+                <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">System Flags & Insights</h3>
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-gray-600 dark:text-gray-400">Confidence:</span>
+                <span className={`text-lg font-bold ${
+                  confidenceScore >= 80 ? 'text-green-600 dark:text-green-400' :
+                  confidenceScore >= 60 ? 'text-yellow-600 dark:text-yellow-400' :
+                  'text-red-600 dark:text-red-400'
+                }`}>
+                  {confidenceScore}%
+                </span>
+              </div>
+            </div>
+            {suspiciousPatterns.length > 0 ? (
+              <div className="space-y-2">
+                {suspiciousPatterns.map((pattern, idx) => (
+                  <div key={idx} className="flex items-start space-x-2 text-sm text-gray-700 dark:text-gray-300">
+                    <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0" />
+                    <span>{pattern}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600 dark:text-gray-400">No suspicious patterns detected. Activity appears normal.</p>
+            )}
+          </div>
+
+          {/* Mouse Activity Section */}
+          <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+            <div className="flex items-center space-x-2 mb-4">
+              <MousePointer className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Mouse Activity</h3>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Active Time</div>
+                <div className="text-xl font-semibold text-gray-800 dark:text-white">
+                  {mouseActivity.totalActiveTime.toFixed(1)}s
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Total Movements</div>
+                <div className="text-xl font-semibold text-gray-800 dark:text-white">
+                  {mouseActivity.totalMovements.toLocaleString()}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Estimated Clicks</div>
+                <div className="text-xl font-semibold text-gray-800 dark:text-white">
+                  {mouseActivity.estimatedClicks}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Scroll Activity</div>
+                <div className="text-xl font-semibold text-gray-800 dark:text-white">
+                  {mouseActivity.scrollActivity}
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800">
+              <p className="text-xs text-yellow-800 dark:text-yellow-300">
+                <strong>Note:</strong> Click heatmap and detailed click coordinates require additional data from the tracking application. 
+                Current data shows aggregate movement counts.
+              </p>
+            </div>
+          </div>
+
+          {/* Keyboard Activity Section */}
+          <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+            <div className="flex items-center space-x-2 mb-4">
+              <Keyboard className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Keyboard Activity</h3>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Total Keystrokes</div>
+                <div className="text-xl font-semibold text-gray-800 dark:text-white">
+                  {keyboardActivity.totalKeystrokes.toLocaleString()}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Active Duration</div>
+                <div className="text-xl font-semibold text-gray-800 dark:text-white">
+                  {keyboardActivity.activeDuration.toFixed(1)}s
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600 dark:text-gray-400">Typing Speed</div>
+                <div className="text-xl font-semibold text-gray-800 dark:text-white">
+                  {keyboardActivity.activeDuration > 0 
+                    ? (keyboardActivity.totalKeystrokes / keyboardActivity.activeDuration).toFixed(1)
+                    : '0'} keys/s
+                </div>
+              </div>
+            </div>
+            {keyboardActivity.keyFrequency && Object.keys(keyboardActivity.keyFrequency).length > 0 && (
+              <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800">
+                <div className="text-xs font-medium text-blue-800 dark:text-blue-300 mb-2">
+                  Key Frequency (Top Keys):
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(keyboardActivity.keyFrequency)
+                    .sort(([, a], [, b]) => (b as number) - (a as number))
+                    .slice(0, 10)
+                    .map(([key, count]) => (
+                      <div key={key} className="text-xs bg-blue-100 dark:bg-blue-800 px-2 py-1 rounded">
+                        {key}: {count as number}
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Website & App Usage */}
+          <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+            <div className="flex items-center space-x-2 mb-4">
+              <Globe className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Website & App Usage</h3>
+            </div>
+            {websites.length > 0 ? (
+              <div className="space-y-2">
+                {websites.slice(0, 10).map((site: any, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-2 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600">
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-800 dark:text-white">{site.domain || 'Unknown'}</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        {site.visitCount || 0} {site.visitCount === 1 ? 'visit' : 'visits'} • {site.totalDuration ? site.totalDuration.toFixed(0) : site.estimatedTime || 0}s
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {websites.length > 10 && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 text-center pt-2">
+                    +{websites.length - 10} more websites
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600 dark:text-gray-400">No website data available for this interval.</p>
+            )}
+            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800">
+              <p className="text-xs text-blue-800 dark:text-blue-300">
+                <strong>Privacy:</strong> Only domain-level URLs are displayed. Full paths and sensitive data are not shown.
+              </p>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-white rounded-lg transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
