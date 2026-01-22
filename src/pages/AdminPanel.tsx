@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity } from 'lucide-react'
+import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor } from 'lucide-react'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
 import {
@@ -237,6 +237,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
           team: newUserForm.team || null,
           manager_id: newUserForm.manager_id || null,
           force_password_change: true, // Force password change on first login
+          enable_screenshot_capture: true, // Default: enabled
+          enable_camera_capture: true, // Default: enabled
         })
 
       if (profileError) {
@@ -444,6 +446,35 @@ export default function AdminPanel({ user }: AdminPanelProps) {
     } catch (error: any) {
       console.error('Error deleting user:', error)
       showError(error.message || 'Failed to delete user')
+    }
+  }
+
+  const handleToggleCaptureSetting = async (userId: string, setting: 'screenshot' | 'camera', currentValue: boolean) => {
+    try {
+      const updateField = setting === 'screenshot' ? 'enable_screenshot_capture' : 'enable_camera_capture'
+      const newValue = !currentValue
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          [updateField]: newValue,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', userId)
+
+      if (error) throw error
+
+      // Update local state
+      setUsers(users.map(u => 
+        u.id === userId 
+          ? { ...u, [updateField]: newValue }
+          : u
+      ))
+
+      showSuccess(`${setting === 'screenshot' ? 'Screenshot' : 'Camera'} capture ${newValue ? 'enabled' : 'disabled'} for user`)
+    } catch (error: any) {
+      console.error(`Error updating ${setting} capture setting:`, error)
+      showError(error.message || `Failed to update ${setting} capture setting`)
     }
   }
 
@@ -868,6 +899,9 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                         <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                           Manager
                         </th>
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                          Capture Settings
+                        </th>
                         <th className="px-6 py-4 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                           Actions
                         </th>
@@ -876,7 +910,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                     <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                       {filteredUsers.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                          <td colSpan={7} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                             <Users className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
                             <p>No users found</p>
                           </td>
@@ -914,6 +948,42 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="text-sm text-gray-600 dark:text-gray-400">
                                 {users.find((m) => m.id === u.manager_id)?.full_name || '—'}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="flex items-center space-x-4">
+                                {/* Screenshot Capture Toggle */}
+                                <div className="flex items-center space-x-2">
+                                  <Monitor className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                                  <label className="relative inline-flex items-center cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={u.enable_screenshot_capture ?? true}
+                                      onChange={() => handleToggleCaptureSetting(u.id, 'screenshot', u.enable_screenshot_capture ?? true)}
+                                      className="sr-only peer"
+                                    />
+                                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                    <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
+                                      {u.enable_screenshot_capture ?? true ? 'On' : 'Off'}
+                                    </span>
+                                  </label>
+                                </div>
+                                {/* Camera Capture Toggle */}
+                                <div className="flex items-center space-x-2">
+                                  <Camera className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                                  <label className="relative inline-flex items-center cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={u.enable_camera_capture ?? true}
+                                      onChange={() => handleToggleCaptureSetting(u.id, 'camera', u.enable_camera_capture ?? true)}
+                                      className="sr-only peer"
+                                    />
+                                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                    <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
+                                      {u.enable_camera_capture ?? true ? 'On' : 'Off'}
+                                    </span>
+                                  </label>
+                                </div>
                               </div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
