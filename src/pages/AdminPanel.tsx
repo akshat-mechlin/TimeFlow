@@ -1294,9 +1294,9 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                             placeholder="1.5.0"
                             pattern="^\d+\.\d+\.\d+$"
                           />
-                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                            Semantic versioning format: MAJOR.MINOR.PATCH (e.g., 1.4.0)
-                          </p>
+                           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                             Semantic versioning format: MAJOR.MINOR.PATCH (e.g., 1.5.0)
+                           </p>
                         </div>
 
                         <div>
