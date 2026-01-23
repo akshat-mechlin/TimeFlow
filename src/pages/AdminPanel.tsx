@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor } from 'lucide-react'
+import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle } from 'lucide-react'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
 import {
@@ -18,6 +18,7 @@ import {
 import { Line, Bar, Pie } from 'react-chartjs-2'
 import { format, startOfMonth, endOfMonth, subDays, eachDayOfInterval } from 'date-fns'
 import type { Tables } from '../types/database'
+import { updateRequiredTrackerVersion, getTrackerVersionStats, type TrackerVersionInfo } from '../lib/trackerVersion'
 
 ChartJS.register(
   CategoryScale,
@@ -89,6 +90,19 @@ export default function AdminPanel({ user }: AdminPanelProps) {
   })
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [analyticsDateRange, setAnalyticsDateRange] = useState('30d') // 7d, 30d, 90d, all
+  
+  // Tracker Version Management state
+  const [trackerVersion, setTrackerVersion] = useState({
+    requiredVersion: '1.5.0',
+    updateUrl: '',
+    forceUpdate: false,
+  })
+  const [trackerVersionStats, setTrackerVersionStats] = useState<{
+    totalUsers: number
+    outdatedUsers: number
+    versionDistribution: Record<string, number>
+  } | null>(null)
+  const [trackerVersionLoading, setTrackerVersionLoading] = useState(false)
 
   // Only allow admin access
   if (user.role !== 'admin') {
@@ -154,6 +168,9 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       }
     } else if (activeTab === 'analytics') {
       fetchAnalytics()
+    } else if (activeTab === 'settings') {
+      fetchTrackerVersionSettings()
+      fetchTrackerVersionStats()
     }
   }, [activeTab])
 
@@ -523,6 +540,75 @@ export default function AdminPanel({ user }: AdminPanelProps) {
     } catch (error: any) {
       console.error('Error saving setting:', error)
       showError(error.message || 'Failed to save setting')
+    }
+  }
+
+  const fetchTrackerVersionSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('system_settings')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['tracker_required_version', 'tracker_update_url', 'tracker_force_update'])
+
+      if (error) throw error
+
+      const settingsMap: Record<string, any> = {}
+      data?.forEach((setting) => {
+        let value = setting.setting_value
+        if (typeof value === 'string' && value.startsWith('"') && value.endsWith('"')) {
+          value = value.slice(1, -1)
+        }
+        settingsMap[setting.setting_key] = value
+      })
+
+      setTrackerVersion({
+        requiredVersion: settingsMap.tracker_required_version || '1.5.0',
+        updateUrl: settingsMap.tracker_update_url || '',
+        forceUpdate: settingsMap.tracker_force_update === true || settingsMap.tracker_force_update === 'true',
+      })
+    } catch (error: any) {
+      console.error('Error fetching tracker version settings:', error)
+      showError(error.message || 'Failed to fetch tracker version settings')
+    }
+  }
+
+  const fetchTrackerVersionStats = async () => {
+    try {
+      const stats = await getTrackerVersionStats()
+      setTrackerVersionStats(stats)
+    } catch (error: any) {
+      console.error('Error fetching tracker version stats:', error)
+    }
+  }
+
+  const handleUpdateTrackerVersion = async () => {
+    try {
+      setTrackerVersionLoading(true)
+      
+      // Validate version format
+      const versionRegex = /^\d+\.\d+\.\d+$/
+      if (!versionRegex.test(trackerVersion.requiredVersion)) {
+        showError('Invalid version format. Use semantic versioning (e.g., 1.0.0)')
+        return
+      }
+
+      const result = await updateRequiredTrackerVersion(
+        trackerVersion.requiredVersion,
+        trackerVersion.updateUrl || null,
+        trackerVersion.forceUpdate
+      )
+
+      if (result.success) {
+        showSuccess('Tracker version updated successfully!')
+        await fetchTrackerVersionStats()
+      } else {
+        showError(result.error || 'Failed to update tracker version')
+      }
+    } catch (error: any) {
+      console.error('Error updating tracker version:', error)
+      showError(error.message || 'Failed to update tracker version')
+    } finally {
+      setTrackerVersionLoading(false)
     }
   }
 
@@ -1159,41 +1245,125 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                     </div>
                   </div>
 
-                  {/* Notification Settings */}
+                  {/* Tracker Version Management */}
                   <div className="p-6 border border-gray-200 dark:border-gray-700 rounded-lg">
                     <div className="flex items-center space-x-2 mb-4">
-                      <Bell className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                      <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Notification Settings</h3>
+                      <Package className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                      <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Tracker Version Management</h3>
                     </div>
                     <div className="space-y-4">
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <p className="text-sm text-blue-800">
-                          <strong>Note:</strong> Notification settings are managed through the Supabase dashboard. 
-                          Configure email templates and SMTP settings in your Supabase project settings.
-                        </p>
+                      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4">
+                        <div className="flex items-start space-x-2">
+                          <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
+                          <div className="text-sm text-blue-800 dark:text-blue-300">
+                            <p className="font-medium mb-1">Version Enforcement</p>
+                            <p>
+                              The Electron tracker app will check its version against the required version on startup.
+                              If versions don't match, tracking will be blocked. This allows you to enforce updates and
+                              ensure all users are on compatible versions.
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                          <div>
-                            <p className="text-sm font-medium text-gray-800 dark:text-white">Email Notifications</p>
-                            <p className="text-xs text-gray-600 dark:text-gray-400">Send email notifications for important events</p>
-                          </div>
-                          <div className="text-sm text-gray-600 dark:text-gray-400">Configure in Supabase</div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Required Tracker Version *
+                          </label>
+                          <input
+                            type="text"
+                            value={trackerVersion.requiredVersion}
+                            onChange={(e) => setTrackerVersion({ ...trackerVersion, requiredVersion: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            placeholder="1.5.0"
+                            pattern="^\d+\.\d+\.\d+$"
+                          />
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            Semantic versioning format: MAJOR.MINOR.PATCH (e.g., 1.4.0)
+                          </p>
                         </div>
-                        <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                          <div>
-                            <p className="text-sm font-medium text-gray-800 dark:text-white">Password Reset Emails</p>
-                            <p className="text-xs text-gray-600 dark:text-gray-400">Send password reset links via email</p>
-                          </div>
-                          <div className="text-sm text-green-600 dark:text-green-400 font-medium">Enabled</div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Update Download URL
+                          </label>
+                          <input
+                            type="url"
+                            value={trackerVersion.updateUrl}
+                            onChange={(e) => setTrackerVersion({ ...trackerVersion, updateUrl: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                            placeholder="https://example.com/download/tracker"
+                          />
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            Optional: URL where users can download the latest version
+                          </p>
                         </div>
-                        <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                          <div>
-                            <p className="text-sm font-medium text-gray-800 dark:text-white">Attendance Alerts</p>
-                            <p className="text-xs text-gray-600 dark:text-gray-400">Notify managers about attendance issues</p>
+                      </div>
+
+                      <div className="flex items-center space-x-3">
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={trackerVersion.forceUpdate}
+                            onChange={(e) => setTrackerVersion({ ...trackerVersion, forceUpdate: e.target.checked })}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                          <span className="ml-3 text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Force Update (Block all outdated versions immediately)
+                          </span>
+                        </label>
+                      </div>
+
+                      {trackerVersionStats && (
+                        <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                          <h4 className="text-sm font-medium text-gray-800 dark:text-white mb-2">Version Statistics (Last 30 Days)</h4>
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                              <span className="text-gray-600 dark:text-gray-400">Total Active Users:</span>
+                              <span className="ml-2 font-medium text-gray-900 dark:text-white">{trackerVersionStats.totalUsers}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600 dark:text-gray-400">Outdated Versions:</span>
+                              <span className={`ml-2 font-medium ${trackerVersionStats.outdatedUsers > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                                {trackerVersionStats.outdatedUsers}
+                              </span>
+                            </div>
                           </div>
-                          <div className="text-sm text-gray-600 dark:text-gray-400">Coming Soon</div>
+                          {Object.keys(trackerVersionStats.versionDistribution).length > 0 && (
+                            <div className="mt-3">
+                              <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Version Distribution:</p>
+                              <div className="space-y-1">
+                                {Object.entries(trackerVersionStats.versionDistribution)
+                                  .sort((a, b) => b[1] - a[1])
+                                  .map(([version, count]) => (
+                                    <div key={version} className="flex items-center justify-between text-xs">
+                                      <span className="text-gray-700 dark:text-gray-300">{version}</span>
+                                      <span className={`font-medium ${
+                                        version === trackerVersion.requiredVersion
+                                          ? 'text-green-600 dark:text-green-400'
+                                          : 'text-yellow-600 dark:text-yellow-400'
+                                      }`}>
+                                        {count} user{count !== 1 ? 's' : ''}
+                                      </span>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
+                      )}
+
+                      <div className="flex justify-end pt-4">
+                        <button
+                          onClick={handleUpdateTrackerVersion}
+                          disabled={trackerVersionLoading}
+                          className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Save className="w-4 h-4" />
+                          <span>{trackerVersionLoading ? 'Saving...' : 'Save Version Settings'}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
