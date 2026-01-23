@@ -146,6 +146,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       }
     } else if (activeTab === 'settings') {
       fetchSystemSettings()
+      fetchTrackerVersionSettings()
+      fetchTrackerVersionStats()
       
       // Set up real-time subscription for system settings
       const settingsChannel = supabase
@@ -159,6 +161,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
           },
           () => {
             fetchSystemSettings()
+            fetchTrackerVersionSettings()
+            fetchTrackerVersionStats()
           }
         )
         .subscribe()
@@ -168,9 +172,6 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       }
     } else if (activeTab === 'analytics') {
       fetchAnalytics()
-    } else if (activeTab === 'settings') {
-      fetchTrackerVersionSettings()
-      fetchTrackerVersionStats()
     }
   }, [activeTab])
 
@@ -555,9 +556,23 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       const settingsMap: Record<string, any> = {}
       data?.forEach((setting) => {
         let value = setting.setting_value
-        if (typeof value === 'string' && value.startsWith('"') && value.endsWith('"')) {
-          value = value.slice(1, -1)
+        
+        // Handle JSONB values - they can be strings, numbers, booleans, or JSON strings
+        if (typeof value === 'string') {
+          // Try to parse if it's a JSON string (e.g., '"1.5.0"' or '{"key": "value"}')
+          try {
+            const parsed = JSON.parse(value)
+            // If parsed result is a string, use it (removes outer quotes)
+            // If it's an object/array/number/boolean, use the parsed value
+            value = parsed
+          } catch {
+            // If parsing fails, check if it's a quoted string and remove quotes
+            if (value.startsWith('"') && value.endsWith('"')) {
+              value = value.slice(1, -1)
+            }
+          }
         }
+        
         settingsMap[setting.setting_key] = value
       })
 
