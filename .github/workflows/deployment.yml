@@ -2,15 +2,13 @@ name: Deploy to Self-Hosted Windows Server
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
   workflow_dispatch:
 
 env:
   IMAGE_NAME: timeflow
   CONTAINER_NAME: timeflow-web
-  APP_PORT: 5173
+  APP_PORT: 5174
 
 jobs:
   build-and-deploy:
