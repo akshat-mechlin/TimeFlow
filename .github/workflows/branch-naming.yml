@@ -1,0 +1,24 @@
+name: "Branch Naming Convention"
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+jobs:
+  check-branch-name:
+    runs-on: self-hosted
+    steps:
+      - name: Check branch name
+        if: github.event_name == 'pull_request'
+        run: |
+          branch_name="${{ github.head_ref }}"
+          regex="^(feature|bugfix|hotfix|release|chore|docs|test)\/[a-z0-9._-]+$"
+          
+          if [[ ! $branch_name =~ $regex ]]; then
+            echo "Error: Branch name '$branch_name' does not match the valid pattern."
+            echo "Expected pattern: $regex"
+            echo "Examples: feature/new-login, bugfix/header-issue"
+            exit 1
+          else
+            echo "Branch name '$branch_name' is valid."
+          fi
