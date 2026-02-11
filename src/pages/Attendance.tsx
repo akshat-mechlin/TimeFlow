@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase, hrmsSupabase } from '../lib/supabase'
 import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info, FileText } from 'lucide-react'
-import { format, parseISO, subDays, subHours, addHours, endOfDay } from 'date-fns'
+import { format, parseISO, subDays, subHours } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
@@ -49,8 +49,8 @@ interface AttendanceRecord {
 export default function Attendance({ user }: AttendanceProps) {
   const [records, setRecords] = useState<AttendanceRecord[]>([])
   const [searchTerm, setSearchTerm] = useState('')
-  const [startDate, setStartDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
-  const [endDate, setEndDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
+  const [startDate, setStartDate] = useState<string>(() => format(toZonedTime(new Date(), 'Asia/Kolkata'), 'yyyy-MM-dd'))
+  const [endDate, setEndDate] = useState<string>(() => format(toZonedTime(new Date(), 'Asia/Kolkata'), 'yyyy-MM-dd'))
   // HR and Accountant should see all users by default (empty array = Select All)
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>(
     (user.role === 'hr' || user.role === 'accountant') ? [] : [user.id]
@@ -72,7 +72,7 @@ export default function Attendance({ user }: AttendanceProps) {
   const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null)
   const [timeEntryForm, setTimeEntryForm] = useState({
     user_id: '',
-    date: format(new Date(), 'yyyy-MM-dd'),
+    date: format(toZonedTime(new Date(), 'Asia/Kolkata'), 'yyyy-MM-dd'),
     start_time: '',
     duration: '', // Duration in hours (as string for input)
     description: '',
@@ -80,6 +80,11 @@ export default function Attendance({ user }: AttendanceProps) {
 
   const IST_TIMEZONE = 'Asia/Kolkata'
   const TRACKER_RESET_HOUR = 0 // 12 AM (midnight) IST
+
+  // Today and date ranges in IST so attendance is consistent regardless of machine timezone
+  const getTodayIST = () => format(toZonedTime(new Date(), IST_TIMEZONE), 'yyyy-MM-dd')
+  const getWeekAgoIST = () => format(subDays(toZonedTime(new Date(), IST_TIMEZONE), 7), 'yyyy-MM-dd')
+  const getMonthAgoIST = () => format(subDays(toZonedTime(new Date(), IST_TIMEZONE), 30), 'yyyy-MM-dd')
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -165,15 +170,9 @@ export default function Attendance({ user }: AttendanceProps) {
   // Get attendance period for a given date in IST
   // Period: 12 AM (midnight) IST of date to 11:59:59 PM IST of same date
   const getAttendancePeriod = (dateStr: string) => {
-    // Parse the date string as IST date
-    const dateInIST = fromZonedTime(`${dateStr} 00:00:00`, IST_TIMEZONE)
-    
-    // Start: 12 AM (midnight) IST of the date
-    const periodStart = addHours(dateInIST, TRACKER_RESET_HOUR)
-    
-    // End: 11:59:59 PM IST of the same date (end of day)
-    const periodEnd = endOfDay(dateInIST)
-    
+    // Parse the date string as IST date (start and end in IST, not local machine time)
+    const periodStart = fromZonedTime(`${dateStr} 00:00:00`, IST_TIMEZONE)
+    const periodEnd = fromZonedTime(`${dateStr} 23:59:59.999`, IST_TIMEZONE)
     return { periodStart, periodEnd }
   }
 
@@ -668,7 +667,7 @@ export default function Attendance({ user }: AttendanceProps) {
     const defaultUserId = canSelectUser ? '' : user.id
     setTimeEntryForm({
       user_id: defaultUserId,
-      date: format(new Date(), 'yyyy-MM-dd'),
+      date: getTodayIST(),
       start_time: '',
       duration: '',
       description: '',
@@ -790,7 +789,7 @@ export default function Attendance({ user }: AttendanceProps) {
       setEditingRecord(null)
       setTimeEntryForm({
         user_id: user.id,
-        date: format(new Date(), 'yyyy-MM-dd'),
+        date: getTodayIST(),
         start_time: '',
         duration: '',
         description: '',
@@ -1540,11 +1539,10 @@ export default function Attendance({ user }: AttendanceProps) {
                     setEndDate(newStartDate)
                   }
                 } else {
-                  // If cleared, set to today's date
-                  setStartDate(format(new Date(), 'yyyy-MM-dd'))
+                  setStartDate(getTodayIST())
                 }
               }}
-              max={format(new Date(), 'yyyy-MM-dd')}
+              max={getTodayIST()}
               className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             />
             <span className="text-sm text-gray-600 dark:text-gray-400">To:</span>
@@ -1560,12 +1558,11 @@ export default function Attendance({ user }: AttendanceProps) {
                     setStartDate(newEndDate)
                   }
                 } else {
-                  // If cleared, set to today's date
-                  setEndDate(format(new Date(), 'yyyy-MM-dd'))
+                  setEndDate(getTodayIST())
                 }
               }}
               min={startDate}
-              max={format(new Date(), 'yyyy-MM-dd')}
+              max={getTodayIST()}
               className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
             />
           </div>
@@ -1576,7 +1573,7 @@ export default function Attendance({ user }: AttendanceProps) {
                 <div className="px-[2px] py-[2px] bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 rounded-lg">
                   <button
                     onClick={() => {
-                      const today = format(new Date(), 'yyyy-MM-dd')
+                      const today = getTodayIST()
                       setStartDate(today)
                       setEndDate(today)
                       setActiveDateRange('today')
@@ -1589,7 +1586,7 @@ export default function Attendance({ user }: AttendanceProps) {
               ) : (
                 <button
                   onClick={() => {
-                    const today = format(new Date(), 'yyyy-MM-dd')
+                    const today = getTodayIST()
                     setStartDate(today)
                     setEndDate(today)
                     setActiveDateRange('today')
@@ -1603,8 +1600,8 @@ export default function Attendance({ user }: AttendanceProps) {
                 <div className="px-[2px] py-[2px] bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 rounded-lg">
                   <button
                     onClick={() => {
-                      const today = format(new Date(), 'yyyy-MM-dd')
-                      const weekAgo = format(subDays(new Date(), 7), 'yyyy-MM-dd')
+                      const today = getTodayIST()
+                      const weekAgo = getWeekAgoIST()
                       setStartDate(weekAgo)
                       setEndDate(today)
                       setActiveDateRange('last7')
@@ -1617,8 +1614,8 @@ export default function Attendance({ user }: AttendanceProps) {
               ) : (
                 <button
                   onClick={() => {
-                    const today = format(new Date(), 'yyyy-MM-dd')
-                    const weekAgo = format(subDays(new Date(), 7), 'yyyy-MM-dd')
+                    const today = getTodayIST()
+                    const weekAgo = getWeekAgoIST()
                     setStartDate(weekAgo)
                     setEndDate(today)
                     setActiveDateRange('last7')
@@ -1632,8 +1629,8 @@ export default function Attendance({ user }: AttendanceProps) {
                 <div className="px-[2px] py-[2px] bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 rounded-lg">
                   <button
                     onClick={() => {
-                      const today = format(new Date(), 'yyyy-MM-dd')
-                      const monthAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
+                      const today = getTodayIST()
+                      const monthAgo = getMonthAgoIST()
                       setStartDate(monthAgo)
                       setEndDate(today)
                       setActiveDateRange('last30')
@@ -1646,8 +1643,8 @@ export default function Attendance({ user }: AttendanceProps) {
               ) : (
                 <button
                   onClick={() => {
-                    const today = format(new Date(), 'yyyy-MM-dd')
-                    const monthAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
+                    const today = getTodayIST()
+                    const monthAgo = getMonthAgoIST()
                     setStartDate(monthAgo)
                     setEndDate(today)
                     setActiveDateRange('last30')
@@ -1663,17 +1660,17 @@ export default function Attendance({ user }: AttendanceProps) {
           {/* Clear Filter Button - Rightmost side */}
           {(() => {
             const isHROrAccountant = user.role === 'hr' || user.role === 'accountant'
+            const todayIST = getTodayIST()
             const isDefaultState = isHROrAccountant
-              ? (selectedUserIds.length === 0 && startDate === format(new Date(), 'yyyy-MM-dd') && endDate === format(new Date(), 'yyyy-MM-dd') && !searchTerm)
-              : (selectedUserIds.length === 1 && selectedUserIds[0] === user.id && startDate === format(new Date(), 'yyyy-MM-dd') && endDate === format(new Date(), 'yyyy-MM-dd') && !searchTerm)
+              ? (selectedUserIds.length === 0 && startDate === todayIST && endDate === todayIST && !searchTerm)
+              : (selectedUserIds.length === 1 && selectedUserIds[0] === user.id && startDate === todayIST && endDate === todayIST && !searchTerm)
             
             return !isDefaultState && (
               <button
                 onClick={() => {
-                  // Reset to default: HR/Accountant see all users, others see only themselves
                   setSelectedUserIds(isHROrAccountant ? [] : [user.id])
-                  setStartDate(format(new Date(), 'yyyy-MM-dd'))
-                  setEndDate(format(new Date(), 'yyyy-MM-dd'))
+                  setStartDate(getTodayIST())
+                  setEndDate(getTodayIST())
                   setSearchTerm('')
                   setActiveDateRange('today')
                 }}
@@ -1950,7 +1947,7 @@ export default function Attendance({ user }: AttendanceProps) {
                             return <span className="text-sm text-gray-400 dark:text-gray-500">—</span>
                           }
                           
-                          const currentDate = format(new Date(), 'yyyy-MM-dd')
+                          const currentDate = getTodayIST()
                           const recordDate = record.date
                           const isCurrentDate = recordDate === currentDate
                           
@@ -2017,7 +2014,7 @@ export default function Attendance({ user }: AttendanceProps) {
                   setEditingRecord(null)
                   setTimeEntryForm({
                     user_id: user.id,
-                    date: format(new Date(), 'yyyy-MM-dd'),
+                    date: getTodayIST(),
                     start_time: '',
                     duration: '',
                     description: '',
@@ -2063,7 +2060,7 @@ export default function Attendance({ user }: AttendanceProps) {
                   id="date"
                   value={timeEntryForm.date}
                   onChange={(e) => setTimeEntryForm({ ...timeEntryForm, date: e.target.value })}
-                  max={format(new Date(), 'yyyy-MM-dd')}
+                  max={getTodayIST()}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                   required
                 />
@@ -2128,7 +2125,7 @@ export default function Attendance({ user }: AttendanceProps) {
                     setEditingRecord(null)
                     setTimeEntryForm({
                       user_id: user.id,
-                      date: format(new Date(), 'yyyy-MM-dd'),
+                      date: getTodayIST(),
                       start_time: '',
                       duration: '',
                       description: '',
