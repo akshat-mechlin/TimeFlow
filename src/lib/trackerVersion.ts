@@ -78,7 +78,7 @@ export async function getRequiredTrackerVersion(): Promise<{
     if (!data || data.length === 0) {
       console.warn('No tracker version settings found. Using defaults.')
       return {
-        requiredVersion: '1.5.0',
+        requiredVersion: '1.6.0',
         updateUrl: null,
         forceUpdate: false,
       }
@@ -91,7 +91,7 @@ export async function getRequiredTrackerVersion(): Promise<{
       
       // Handle JSONB values - they can be strings, numbers, booleans, or JSON strings
       if (typeof value === 'string') {
-        // Try to parse if it's a JSON string (e.g., '"1.5.0"' or '{"key": "value"}')
+        // Try to parse if it's a JSON string (e.g., '"1.6.0"' or '{"key": "value"}')
         try {
           const parsed = JSON.parse(value)
           // If parsed result is a string, use it (removes outer quotes)
@@ -109,7 +109,7 @@ export async function getRequiredTrackerVersion(): Promise<{
     })
 
       return {
-        requiredVersion: settingsMap.tracker_required_version || '1.5.0',
+        requiredVersion: settingsMap.tracker_required_version || '1.6.0',
         updateUrl: settingsMap.tracker_update_url || null,
         forceUpdate: settingsMap.tracker_force_update === true || settingsMap.tracker_force_update === 'true',
       }
@@ -142,7 +142,7 @@ export async function checkTrackerVersion(
       // Log this as an error
       await logVersionCheck(userId, currentVersion, null, false, 'Failed to fetch version settings', deviceInfo)
       return {
-        requiredVersion: '1.5.0',
+        requiredVersion: '1.6.0',
         updateUrl: null,
         forceUpdate: false,
         isCompatible: true, // Fail open
@@ -174,7 +174,7 @@ export async function checkTrackerVersion(
     console.error('Error in checkTrackerVersion:', error)
     // Fail open - allow app to continue if there's an error
     return {
-      requiredVersion: '1.5.0',
+      requiredVersion: '1.6.0',
       updateUrl: null,
       forceUpdate: false,
       isCompatible: true,
