@@ -93,7 +93,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
   
   // Tracker Version Management state
   const [trackerVersion, setTrackerVersion] = useState({
-    requiredVersion: '1.5.0',
+    requiredVersion: '1.6.0',
     updateUrl: '',
     forceUpdate: false,
   })
@@ -559,7 +559,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         
         // Handle JSONB values - they can be strings, numbers, booleans, or JSON strings
         if (typeof value === 'string') {
-          // Try to parse if it's a JSON string (e.g., '"1.5.0"' or '{"key": "value"}')
+          // Try to parse if it's a JSON string (e.g., '"1.6.0"' or '{"key": "value"}')
           try {
             const parsed = JSON.parse(value)
             // If parsed result is a string, use it (removes outer quotes)
@@ -577,7 +577,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       })
 
       setTrackerVersion({
-        requiredVersion: settingsMap.tracker_required_version || '1.5.0',
+        requiredVersion: settingsMap.tracker_required_version || '1.6.0',
         updateUrl: settingsMap.tracker_update_url || '',
         forceUpdate: settingsMap.tracker_force_update === true || settingsMap.tracker_force_update === 'true',
       })
@@ -1291,11 +1291,11 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                             value={trackerVersion.requiredVersion}
                             onChange={(e) => setTrackerVersion({ ...trackerVersion, requiredVersion: e.target.value })}
                             className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                            placeholder="1.5.0"
+                            placeholder="1.6.0"
                             pattern="^\d+\.\d+\.\d+$"
                           />
                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                             Semantic versioning format: MAJOR.MINOR.PATCH (e.g., 1.5.0)
+                             Semantic versioning format: MAJOR.MINOR.PATCH (e.g., 1.6.0)
                            </p>
                         </div>
 
