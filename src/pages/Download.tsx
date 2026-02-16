@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useToast } from '../contexts/ToastContext'
 import Loader from '../components/Loader'
 import packageJson from '../../package.json'
+import { getRequiredTrackerVersion } from '../lib/trackerVersion'
 
 // Windows Icon Component
 const WindowsIcon = ({ className }: { className?: string }) => (
@@ -34,12 +35,26 @@ export default function Download() {
     windows: '',
     macos: '',
   })
+  const [version, setVersion] = useState<string>(packageJson.version)
   const [loading, setLoading] = useState(true)
   const { showError, showInfo } = useToast()
 
   useEffect(() => {
     fetchDownloadLinks()
+    fetchTrackerVersion()
   }, [])
+
+  const fetchTrackerVersion = async () => {
+    try {
+      const versionSettings = await getRequiredTrackerVersion()
+      if (versionSettings && versionSettings.requiredVersion) {
+        setVersion(versionSettings.requiredVersion)
+      }
+    } catch (error) {
+      console.error('Error fetching tracker version:', error)
+      // Keep default version from package.json if fetch fails
+    }
+  }
 
   const fetchDownloadLinks = async () => {
     try {
@@ -217,7 +232,7 @@ export default function Download() {
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-4xl font-bold">Download TimeFlow Desktop App</h1>
           <span className="px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-sm font-semibold border border-white/30">
-            v{packageJson.version}
+            v{version}
           </span>
         </div>
         <p className="text-blue-100 text-lg">
@@ -235,7 +250,7 @@ export default function Download() {
           <div className="flex items-center justify-center gap-2 mb-2">
             <h3 className="text-xl font-semibold text-gray-800 dark:text-white text-center">Windows</h3>
             <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-xs font-semibold">
-              v{packageJson.version}
+              v{version}
             </span>
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-6">
@@ -260,7 +275,7 @@ export default function Download() {
           <div className="flex items-center justify-center gap-2 mb-2">
             <h3 className="text-xl font-semibold text-gray-800 dark:text-white text-center">macOS</h3>
             <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-xs font-semibold">
-              v{packageJson.version}
+              v{version}
             </span>
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-6">

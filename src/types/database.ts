@@ -406,6 +406,8 @@ export type Database = {
           avatar_url: string | null
           created_at: string | null
           email: string | null
+          enable_camera_capture: boolean
+          enable_screenshot_capture: boolean
           force_password_change: boolean | null
           full_name: string
           id: string
@@ -420,6 +422,8 @@ export type Database = {
           avatar_url?: string | null
           created_at?: string | null
           email?: string | null
+          enable_camera_capture?: boolean
+          enable_screenshot_capture?: boolean
           force_password_change?: boolean | null
           full_name: string
           id: string
@@ -434,6 +438,8 @@ export type Database = {
           avatar_url?: string | null
           created_at?: string | null
           email?: string | null
+          enable_camera_capture?: boolean
+          enable_screenshot_capture?: boolean
           force_password_change?: boolean | null
           full_name?: string
           id?: string
@@ -599,6 +605,101 @@ export type Database = {
           },
         ]
       }
+      screenshot_activity: {
+        Row: {
+          active_applications: Json | null
+          app_version: string | null
+          created_at: string | null
+          device_os: string | null
+          id: string
+          interval_duration_seconds: number
+          interval_end_time: string
+          interval_start_time: string
+          keyboard_activity_details: Json
+          keyboard_usage_percentage: number
+          mouse_activity_details: Json
+          mouse_usage_percentage: number
+          project_id: string | null
+          screenshot_id: string
+          suspicious_activity_flags: string[] | null
+          time_entry_id: string | null
+          updated_at: string | null
+          user_id: string
+          visited_websites: Json | null
+        }
+        Insert: {
+          active_applications?: Json | null
+          app_version?: string | null
+          created_at?: string | null
+          device_os?: string | null
+          id?: string
+          interval_duration_seconds: number
+          interval_end_time: string
+          interval_start_time: string
+          keyboard_activity_details?: Json
+          keyboard_usage_percentage?: number
+          mouse_activity_details?: Json
+          mouse_usage_percentage?: number
+          project_id?: string | null
+          screenshot_id: string
+          suspicious_activity_flags?: string[] | null
+          time_entry_id?: string | null
+          updated_at?: string | null
+          user_id: string
+          visited_websites?: Json | null
+        }
+        Update: {
+          active_applications?: Json | null
+          app_version?: string | null
+          created_at?: string | null
+          device_os?: string | null
+          id?: string
+          interval_duration_seconds?: number
+          interval_end_time?: string
+          interval_start_time?: string
+          keyboard_activity_details?: Json
+          keyboard_usage_percentage?: number
+          mouse_activity_details?: Json
+          mouse_usage_percentage?: number
+          project_id?: string | null
+          screenshot_id?: string
+          suspicious_activity_flags?: string[] | null
+          time_entry_id?: string | null
+          updated_at?: string | null
+          user_id?: string
+          visited_websites?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "screenshot_activity_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "screenshot_activity_screenshot_id_fkey"
+            columns: ["screenshot_id"]
+            isOneToOne: false
+            referencedRelation: "screenshots"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "screenshot_activity_time_entry_id_fkey"
+            columns: ["time_entry_id"]
+            isOneToOne: false
+            referencedRelation: "time_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "screenshot_activity_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       screenshots: {
         Row: {
           created_at: string | null
@@ -725,6 +826,50 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "time_entries_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_logs: {
+        Row: {
+          created_at: string
+          device_info: string | null
+          id: string
+          ip_address: string | null
+          log_message: string
+          log_type: string
+          metadata: Json | null
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          device_info?: string | null
+          id?: string
+          ip_address?: string | null
+          log_message: string
+          log_type: string
+          metadata?: Json | null
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          device_info?: string | null
+          id?: string
+          ip_address?: string | null
+          log_message?: string
+          log_type?: string
+          metadata?: Json | null
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_logs_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
