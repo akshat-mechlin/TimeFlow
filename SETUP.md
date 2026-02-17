@@ -69,6 +69,14 @@ server: {
 - Check that your Supabase project is active
 - Ensure Row Level Security (RLS) policies allow your user to access the tables
 
+## Email reports to managers (Microsoft 365)
+
+To send attendance and tracker reports to managers via Microsoft 365, configure the Edge Function and Azure AD app. See **[EMAIL_REPORTS_SETUP.md](./EMAIL_REPORTS_SETUP.md)** for:
+
+- Azure AD app registration and **Mail.Send** permission
+- Supabase Edge Function secrets (`MICROSOFT_TENANT_ID`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_FROM_EMAIL`)
+- Deploying `send-manager-reports` and optional scheduled sending
+
 ## Database Setup
 
 The application expects the following Supabase tables:

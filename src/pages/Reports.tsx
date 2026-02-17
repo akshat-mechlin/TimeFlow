@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { Calendar, Download, Filter, X, RefreshCw, Search } from 'lucide-react'
+import { Calendar, Download, Filter, X, RefreshCw, Search, Mail } from 'lucide-react'
 import Loader from '../components/Loader'
 import {
   Chart as ChartJS,
@@ -17,6 +17,7 @@ import {
 import { Line, Bar, Pie } from 'react-chartjs-2'
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, subDays } from 'date-fns'
 import type { Tables } from '../types/database'
+import { useToast } from '../contexts/ToastContext'
 
 ChartJS.register(
   CategoryScale,
@@ -37,6 +38,8 @@ interface ReportsProps {
 }
 
 export default function Reports({ user }: ReportsProps) {
+  const { showSuccess, showError } = useToast()
+  const [sendingReports, setSendingReports] = useState(false)
   const [dateRange, setDateRange] = useState({
     start: startOfMonth(new Date()),
     end: endOfMonth(new Date()),
@@ -519,6 +522,26 @@ export default function Reports({ user }: ReportsProps) {
                            selectedProject !== 'all' || 
                            selectedRole !== 'all'
 
+  const sendReportsToManagers = async () => {
+    setSendingReports(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('send-manager-reports', {
+        body: {
+          startDate: format(dateRange.start, 'yyyy-MM-dd'),
+          endDate: format(dateRange.end, 'yyyy-MM-dd'),
+        },
+      })
+      if (error) throw error
+      const result = data as { error?: string; message?: string; sent?: number }
+      if (result?.error) throw new Error(result.error)
+      showSuccess(result?.message || `Reports sent to ${result?.sent ?? 0} manager(s).`)
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to send reports to managers.')
+    } finally {
+      setSendingReports(false)
+    }
+  }
+
   const handleExportCSV = () => {
     // Get entries to export - need to recalculate filtered entries
     let entriesToExport: any[] = []
@@ -619,6 +642,46 @@ export default function Reports({ user }: ReportsProps) {
             </button>
         </div>
       </div>
+
+      {/* Email reports (Admin: to all managers; Manager: to themselves) - Microsoft 365 */}
+      {(user.role === 'admin' || user.role === 'manager') && (
+        <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-1 flex items-center gap-2">
+                <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                Email reports to managers
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                {user.role === 'admin'
+                  ? "Send attendance and tracker reports for the selected date range to each manager (Microsoft 365). Each manager receives their team's report at their profile email."
+                  : "Send your team's attendance and tracker report for the selected date range to your email (Microsoft 365)."}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                Period: {format(dateRange.start, 'MMM d, yyyy')} – {format(dateRange.end, 'MMM d, yyyy')}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={sendReportsToManagers}
+              disabled={sendingReports}
+              className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {sendingReports ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Sending…</span>
+                </>
+              ) : (
+                <>
+                  <Mail className="w-4 h-4" />
+                  <span>Send reports now</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Filters Section */}
       <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
