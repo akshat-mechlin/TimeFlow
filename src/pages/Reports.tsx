@@ -525,10 +525,21 @@ export default function Reports({ user }: ReportsProps) {
   const sendReportsToManagers = async () => {
     setSendingReports(true)
     try {
+      // Ensure we have a valid session and pass a fresh JWT (refresh if expired)
+      const { data: { session }, error: sessionError } = await supabase.auth.refreshSession()
+      if (sessionError) throw sessionError
+      const token = session?.access_token
+      if (!token) {
+        showError('Please sign in again to send reports.')
+        return
+      }
       const { data, error } = await supabase.functions.invoke('send-manager-reports', {
         body: {
           startDate: format(dateRange.start, 'yyyy-MM-dd'),
           endDate: format(dateRange.end, 'yyyy-MM-dd'),
+        },
+        headers: {
+          Authorization: `Bearer ${token}`,
         },
       })
       if (error) throw error
