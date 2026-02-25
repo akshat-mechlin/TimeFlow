@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle } from 'lucide-react'
+import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle, Mailbox } from 'lucide-react'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
 import {
@@ -103,6 +103,11 @@ export default function AdminPanel({ user }: AdminPanelProps) {
     versionDistribution: Record<string, number>
   } | null>(null)
   const [trackerVersionLoading, setTrackerVersionLoading] = useState(false)
+
+  // Report recipients (HR & Payroll) - admin only
+  const [reportHrEmails, setReportHrEmails] = useState('')
+  const [reportPayrollEmails, setReportPayrollEmails] = useState('')
+  const [reportRecipientsSaving, setReportRecipientsSaving] = useState(false)
 
   // Only allow admin access
   if (user.role !== 'admin') {
@@ -515,6 +520,19 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         settingsMap[setting.setting_key] = value as string
       })
       setSystemSettings(settingsMap)
+      // Parse report recipient emails (stored as JSON arrays)
+      const hrRaw = data?.find((s) => s.setting_key === 'report_hr_emails')?.setting_value
+      const payrollRaw = data?.find((s) => s.setting_key === 'report_payroll_emails')?.setting_value
+      const parseEmails = (v: unknown): string => {
+        if (Array.isArray(v)) return v.filter(Boolean).map(String).join(', ')
+        if (typeof v === 'string') {
+          try { const a = JSON.parse(v); return Array.isArray(a) ? a.join(', ') : v }
+          catch { return v }
+        }
+        return ''
+      }
+      setReportHrEmails(parseEmails(hrRaw))
+      setReportPayrollEmails(parseEmails(payrollRaw))
     } catch (error: any) {
       console.error('Error fetching system settings:', error)
       showError(error.message || 'Failed to fetch system settings')
@@ -541,6 +559,47 @@ export default function AdminPanel({ user }: AdminPanelProps) {
     } catch (error: any) {
       console.error('Error saving setting:', error)
       showError(error.message || 'Failed to save setting')
+    }
+  }
+
+  const parseEmailList = (text: string): string[] => {
+    return text
+      .split(/[\n,;]+/)
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0)
+  }
+
+  const saveReportRecipients = async () => {
+    try {
+      setReportRecipientsSaving(true)
+      const hrList = parseEmailList(reportHrEmails)
+      const payrollList = parseEmailList(reportPayrollEmails)
+      const { error: hrError } = await supabase
+        .from('system_settings')
+        .upsert({
+          setting_key: 'report_hr_emails',
+          setting_value: hrList,
+          category: 'reports',
+          description: 'HR team emails to receive weekly and manual reports',
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'setting_key' })
+      if (hrError) throw hrError
+      const { error: payrollError } = await supabase
+        .from('system_settings')
+        .upsert({
+          setting_key: 'report_payroll_emails',
+          setting_value: payrollList,
+          category: 'reports',
+          description: 'Payroll team emails to receive weekly and manual reports',
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'setting_key' })
+      if (payrollError) throw payrollError
+      showSuccess('Report recipients saved. HR and Payroll will receive reports on the next send.')
+    } catch (error: any) {
+      console.error('Error saving report recipients:', error)
+      showError(error?.message || 'Failed to save report recipients')
+    } finally {
+      setReportRecipientsSaving(false)
     }
   }
 
@@ -1380,6 +1439,49 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                           <span>{trackerVersionLoading ? 'Saving...' : 'Save Version Settings'}</span>
                         </button>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Report Recipients (HR & Payroll) - Admin only */}
+                  <div className="p-6 border border-gray-200 dark:border-gray-700 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-4">
+                      <Mailbox className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                      <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Report Recipients (HR & Payroll)</h3>
+                    </div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                      These emails receive the same weekly and on-demand reports (team hours, project breakdown, leaves, day-wise tracker). Separate multiple emails with commas or new lines.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">HR team emails</label>
+                        <textarea
+                          value={reportHrEmails}
+                          onChange={(e) => setReportHrEmails(e.target.value)}
+                          rows={3}
+                          placeholder="hr@company.com, hr2@company.com"
+                          className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Payroll team emails</label>
+                        <textarea
+                          value={reportPayrollEmails}
+                          onChange={(e) => setReportPayrollEmails(e.target.value)}
+                          rows={3}
+                          placeholder="payroll@company.com"
+                          className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end pt-4">
+                      <button
+                        onClick={saveReportRecipients}
+                        disabled={reportRecipientsSaving}
+                        className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span>{reportRecipientsSaving ? 'Saving...' : 'Save report recipients'}</span>
+                      </button>
                     </div>
                   </div>
 

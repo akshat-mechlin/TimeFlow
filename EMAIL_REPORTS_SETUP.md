@@ -32,11 +32,14 @@ To send all report emails **from** `hrms@mechlintech.com`:
 
 ## How it works
 
-- **Who can trigger:** Only **admins** can use “Send reports now” on the Reports page.
-- **Who receives:** Each user with role **manager** and a valid **email** in `profiles` receives one email per report run.
+- **Who can trigger “Send reports now”:**
+  - **Admins:** Send to **all managers** (each manager gets their team’s report). HR and Payroll emails (if configured) also receive a copy of each report.
+  - **Managers:** Send only to **themselves** (their own team’s report). HR and Payroll also receive a copy.
+- **Who receives:** Each manager with a valid **email** in `profiles` receives their team’s report. Additional recipients (HR and Payroll) are configured in **Admin Panel → System Settings → Report Recipients (HR & Payroll)** (admin only).
 - **Content:** Each email includes:
   - **Attendance report** – daily status (Present / Half day / Absent) and hours for each employee in the manager’s team.
   - **Tracker report** – time by project per employee and subtotals.
+  - **Leaves** – approved leaves in the period (employee, leave type, dates, reason).
 
 The date range is the same as the one selected on the Reports page when you click “Send reports now”.
 
@@ -94,35 +97,85 @@ MICROSOFT_FROM_EMAIL=hrms@mechlintech.com
 
 **Where to set these:** Supabase Dashboard → your project → **Project Settings** → **Edge Functions** → **Secrets**. Add each name and value, then save.
 
-### 6. Deploy the Edge Function
+### 6. Deploy the Edge Functions
 
-Deploy the function so Supabase can run it:
+Deploy the functions so Supabase can run them:
 
 ```bash
 # From project root
 npx supabase functions deploy send-manager-reports
+npx supabase functions deploy send-weekly-reports
 ```
 
-If you use the Supabase Dashboard, you can instead create the function there and paste the code from `supabase/functions/send-manager-reports/index.ts`.
+If you use the Supabase Dashboard, you can instead create the functions there and paste the code from `supabase/functions/send-manager-reports/index.ts` and `supabase/functions/send-weekly-reports/index.ts`.
+
+## Report recipients (HR & Payroll)
+
+Admins can configure additional email recipients that receive every report (manual and weekly):
+
+1. Log in as an **admin**.
+2. Go to **Admin Panel** → **System Settings**.
+3. In **Report Recipients (HR & Payroll)**, enter HR team emails and Payroll team emails (comma- or newline-separated).
+4. Click **Save report recipients**.
+
+These addresses receive the same report emails as managers (per-run for “Send reports now”, and the weekly Excel report when the weekly job runs).
 
 ## Sending reports
 
-1. Log in as an **admin**.
-2. Open **Reports** and set the **date range** you want.
+1. Log in as an **admin** or **manager**.
+2. Open **Reports** and set the **date range** you want (for “Send reports now”).
 3. Click **“Send reports now”** in the “Email reports to managers” section.
-4. Each manager (with an email in their profile) receives one email with their team’s attendance and tracker report for that period.
+   - **Admin:** All managers receive their team’s report; HR and Payroll (if configured) receive copies.
+   - **Manager:** You receive your team’s report; HR and Payroll receive a copy.
+4. **(Admin only)** To send the **weekly report** (previous Monday–Saturday) as an **Excel attachment** to all managers and HR/Payroll, click **“Send weekly report now”**. The Excel contains: Summary (total week hours), Project-wise, Leaves, and Day-wise (Mon–Sat) sheets.
 
 ## Automatic (scheduled) sending
 
-The app does not run a built-in schedule. To send reports automatically (e.g. daily or weekly):
+### Weekly report every Monday
 
-- Use an external cron (e.g. [cron-job.org](https://cron-job.org), GitHub Actions, or your own server) that calls the Edge Function **with a valid admin JWT** in the `Authorization: Bearer <token>` header, and body:
+To send the **weekly report** (previous week Mon–Sat) automatically every Monday:
 
-  ```json
-  { "startDate": "2026-02-10", "endDate": "2026-02-16" }
-  ```
+1. **Set a cron secret** in Supabase Edge Function secrets:
+   - Name: `CRON_SECRET`
+   - Value: a long random string (e.g. from `openssl rand -base64 32`).
 
-- Or use Supabase’s [pg_cron](https://supabase.com/docs/guides/database/extensions/pgcron) (or similar) to trigger an HTTP request to the function with an admin token (store the token securely and rotate as needed).
+2. **Enable pg_cron and pg_net** in your Supabase project (Database → Extensions).
+
+3. **Schedule the weekly function** (e.g. every Monday at 9:00 AM UTC). In the SQL Editor, run (replace `YOUR_CRON_SECRET` and your project URL/anon key if using Vault):
+
+```sql
+-- Store secrets in Vault first (if not already):
+-- select vault.create_secret('YOUR_CRON_SECRET', 'cron_secret');
+-- select vault.create_secret('https://YOUR_PROJECT_REF.supabase.co', 'project_url');
+-- select vault.create_secret('YOUR_ANON_KEY', 'anon_key');
+
+select cron.schedule(
+  'send-weekly-reports-monday',
+  '0 9 * * 1',  -- Every Monday at 09:00 UTC
+  $$
+  select net.http_post(
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/send-weekly-reports',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'anon_key')
+    ),
+    body := jsonb_build_object('cronSecret', (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'))
+  ) as request_id;
+  $$
+);
+```
+
+Alternatively, use an external cron (e.g. [cron-job.org](https://cron-job.org)) that POSTs to `https://YOUR_PROJECT_REF.supabase.co/functions/v1/send-weekly-reports` with body `{"cronSecret": "YOUR_CRON_SECRET"}` and no auth (the secret in the body authorizes the run).
+
+### Manual “Send reports now” on a schedule
+
+To run the **date-range report** (same as “Send reports now”) on a schedule, use an external cron that calls `send-manager-reports` with a valid **admin JWT** in the `Authorization: Bearer <token>` header and body:
+
+```json
+{ "startDate": "2026-02-10", "endDate": "2026-02-16" }
+```
+
+Store and rotate the admin token securely.
 
 ## Troubleshooting
 
@@ -130,7 +183,7 @@ The app does not run a built-in schedule. To send reports automatically (e.g. da
   One or more of the four secrets above are missing. Add them in Supabase Edge Function secrets.
 
 - **“Only admins can send reports to managers”**  
-  The user calling the function must have `role = 'admin'` in `profiles`.
+  The docs previously said only admins; both **admins** and **managers** can use “Send reports now” (admin sends to all managers, manager sends to themselves). Only **admins** can use “Send weekly report now” and configure HR/Payroll recipients.
 
 - **Managers don’t receive email**  
   - Ensure each manager has `profiles.email` set and that it’s a valid Microsoft 365 mailbox if you’re sending inside the same tenant.  

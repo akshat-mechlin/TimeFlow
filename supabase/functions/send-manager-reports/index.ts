@@ -151,6 +151,22 @@ Deno.serve(async (req) => {
     const startStr = format(start, 'yyyy-MM-dd')
     const endStr = format(end, 'yyyy-MM-dd')
 
+    // Fetch HR and Payroll report recipients from system_settings
+    const { data: reportSettings } = await supabase
+      .from('system_settings')
+      .select('setting_key, setting_value')
+      .in('setting_key', ['report_hr_emails', 'report_payroll_emails'])
+    const hrEmails: string[] = []
+    const payrollEmails: string[] = []
+    reportSettings?.forEach((row: { setting_key: string; setting_value: unknown }) => {
+      const v = row.setting_value
+      const arr = Array.isArray(v) ? v : (typeof v === 'string' ? (() => { try { return JSON.parse(v) } catch { return [] } })() : [])
+      const list = Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string').map((e) => String(e).trim()).filter(Boolean) : []
+      if (row.setting_key === 'report_hr_emails') hrEmails.push(...list)
+      if (row.setting_key === 'report_payroll_emails') payrollEmails.push(...list)
+    })
+    const extraRecipients = [...new Set([...hrEmails, ...payrollEmails])]
+
     // If caller is a manager, send only to themselves. If admin, send to all managers.
     let managers: Profile[]
     if (role === 'manager') {
@@ -201,6 +217,26 @@ Deno.serve(async (req) => {
         .order('start_time', { ascending: true })
 
       const entries = (timeEntries || []) as TimeEntry[]
+
+      // Fetch approved leaves overlapping the period for this team
+      const { data: leaveRows } = await supabase
+        .from('leave_requests')
+        .select('user_id, start_date, end_date, reason, leave_types(name)')
+        .eq('status', 'approved')
+        .lte('start_date', endStr)
+        .gte('end_date', startStr)
+        .in('user_id', teamIds)
+      const leavesByUser = new Map<string, Array<{ start: string; end: string; typeName: string; reason: string }>>()
+      ;(leaveRows || []).forEach((l: { user_id: string; start_date: string; end_date: string; reason: string; leave_types: { name: string } | null }) => {
+        const list = leavesByUser.get(l.user_id) || []
+        list.push({
+          start: l.start_date,
+          end: l.end_date,
+          typeName: l.leave_types?.name || 'Leave',
+          reason: l.reason || '',
+        })
+        leavesByUser.set(l.user_id, list)
+      })
 
       const days = eachDayOfInterval({ start, end })
       const byUserDay = new Map<string, { hours: number; status: string }>()
@@ -282,6 +318,22 @@ Deno.serve(async (req) => {
         trackerRows = '<tr><td colspan="3" style="padding:12px;color:#666">No time entries in this period.</td></tr>'
       }
 
+      let leaveRowsHtml = ''
+      for (const userId of teamIds) {
+        const name = userNames.get(userId) || 'Unknown'
+        const userLeaves = leavesByUser.get(userId) || []
+        if (userLeaves.length === 0) {
+          leaveRowsHtml += `<tr><td style="border:1px solid #ddd;padding:6px">${name}</td><td colspan="3" style="border:1px solid #ddd;padding:6px;color:#666">None</td></tr>`
+        } else {
+          userLeaves.forEach((lev, i) => {
+            leaveRowsHtml += `<tr><td style="border:1px solid #ddd;padding:6px">${i === 0 ? name : ''}</td><td style="border:1px solid #ddd;padding:6px">${lev.typeName}</td><td style="border:1px solid #ddd;padding:6px">${lev.start} to ${lev.end}</td><td style="border:1px solid #ddd;padding:6px">${lev.reason || '—'}</td></tr>`
+          })
+        }
+      }
+      if (leaveRowsHtml === '') {
+        leaveRowsHtml = '<tr><td colspan="4" style="padding:12px;color:#666">No approved leaves in this period.</td></tr>'
+      }
+
       const subject = `TimeFlow Reports: ${startStr} to ${endStr}`
       const html = `
 <!DOCTYPE html>
@@ -316,6 +368,19 @@ Deno.serve(async (req) => {
     <tbody>${trackerRows}</tbody>
   </table>
 
+  <h2 style="color:#1e40af;margin-top:28px">Leaves (approved)</h2>
+  <table style="border-collapse:collapse;width:100%;font-size:13px">
+    <thead>
+      <tr style="background:#f1f5f9">
+        <th style="border:1px solid #ddd;padding:8px">Employee</th>
+        <th style="border:1px solid #ddd;padding:8px">Leave type</th>
+        <th style="border:1px solid #ddd;padding:8px">Period</th>
+        <th style="border:1px solid #ddd;padding:8px">Reason</th>
+      </tr>
+    </thead>
+    <tbody>${leaveRowsHtml}</tbody>
+  </table>
+
   <p style="margin-top:28px;font-size:12px;color:#64748b">This is an automated email from TimeFlow. You can view full reports in the app.</p>
 </body>
 </html>`
@@ -325,6 +390,15 @@ Deno.serve(async (req) => {
         sent++
       } catch (e) {
         console.error(`Failed to send to ${managerEmail}:`, e)
+      }
+      for (const toEmail of extraRecipients) {
+        if (!toEmail || toEmail === managerEmail) continue
+        try {
+          await sendGraphMail(token, fromEmail, toEmail, subject, html)
+          sent++
+        } catch (e) {
+          console.error(`Failed to send to ${toEmail}:`, e)
+        }
       }
     }
 

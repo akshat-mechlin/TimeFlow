@@ -40,6 +40,7 @@ interface ReportsProps {
 export default function Reports({ user }: ReportsProps) {
   const { showSuccess, showError } = useToast()
   const [sendingReports, setSendingReports] = useState(false)
+  const [sendingWeekly, setSendingWeekly] = useState(false)
   const [dateRange, setDateRange] = useState({
     start: startOfMonth(new Date()),
     end: endOfMonth(new Date()),
@@ -553,6 +554,33 @@ export default function Reports({ user }: ReportsProps) {
     }
   }
 
+  const sendWeeklyReportsNow = async () => {
+    if (user.role !== 'admin') return
+    setSendingWeekly(true)
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.refreshSession()
+      if (sessionError) throw sessionError
+      const token = session?.access_token
+      if (!token) {
+        showError('Please sign in again to send weekly reports.')
+        return
+      }
+      const { data, error } = await supabase.functions.invoke('send-weekly-reports', {
+        body: {},
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (error) throw error
+      const result = data as { error?: string; message?: string; sent?: number; period?: { startDate: string; endDate: string } }
+      if (result?.error) throw new Error(result.error)
+      const period = result?.period ? ` (${result.period.startDate} – ${result.period.endDate})` : ''
+      showSuccess((result?.message || `Weekly reports sent to ${result?.sent ?? 0} recipient(s).`) + period)
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Failed to send weekly reports.')
+    } finally {
+      setSendingWeekly(false)
+    }
+  }
+
   const handleExportCSV = () => {
     // Get entries to export - need to recalculate filtered entries
     let entriesToExport: any[] = []
@@ -665,13 +693,14 @@ export default function Reports({ user }: ReportsProps) {
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 {user.role === 'admin'
-                  ? "Send attendance and tracker reports for the selected date range to each manager (Microsoft 365). Each manager receives their team's report at their profile email."
+                  ? "Send attendance and tracker reports for the selected date range to each manager (Microsoft 365). Each manager receives their team's report; HR and Payroll also receive copies if configured in Admin → System Settings."
                   : "Send your team's attendance and tracker report for the selected date range to your email (Microsoft 365)."}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
                 Period: {format(dateRange.start, 'MMM d, yyyy')} – {format(dateRange.end, 'MMM d, yyyy')}
               </p>
             </div>
+            <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={sendReportsToManagers}
@@ -690,6 +719,28 @@ export default function Reports({ user }: ReportsProps) {
                 </>
               )}
             </button>
+            {user.role === 'admin' && (
+              <button
+                type="button"
+                onClick={sendWeeklyReportsNow}
+                disabled={sendingWeekly}
+                className="flex items-center space-x-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Send previous week (Mon–Sat) report as Excel to all managers and HR/Payroll"
+              >
+                {sendingWeekly ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Sending…</span>
+                  </>
+                ) : (
+                  <>
+                    <Calendar className="w-4 h-4" />
+                    <span>Send weekly report now</span>
+                  </>
+                )}
+              </button>
+            )}
+            </div>
           </div>
         </div>
       )}
