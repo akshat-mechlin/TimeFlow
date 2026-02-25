@@ -1,9 +1,9 @@
 // Send attendance and tracker reports to each manager via Microsoft 365 (Graph API)
+// Invoke with body: { startDate?, endDate? } for date-range HTML report, or { weekly: true } for previous-week Excel (admin only)
 // Requires: MICROSOFT_TENANT_ID, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_FROM_EMAIL
-// Invoke with body: { startDate?: string (YYYY-MM-DD), endDate?: string (YYYY-MM-DD) }
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
-import { format, parseISO, startOfDay, endOfDay, eachDayOfInterval } from 'https://esm.sh/date-fns@3.0.6'
+import { format, parseISO, startOfDay, endOfDay, eachDayOfInterval, startOfWeek, subWeeks, addDays } from 'https://esm.sh/date-fns@3.0.6'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -80,6 +80,39 @@ function sendGraphMail(
   })
 }
 
+function sendGraphMailWithAttachment(
+  token: string,
+  fromEmail: string,
+  toEmail: string,
+  subject: string,
+  htmlBody: string,
+  attachmentName: string,
+  attachmentBase64: string,
+  contentType: string
+): Promise<void> {
+  const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(fromEmail)}/sendMail`
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'HTML', content: htmlBody },
+        toRecipients: [{ emailAddress: { address: toEmail } }],
+        attachments: [
+          { '@odata.type': '#microsoft.graph.fileAttachment', name: attachmentName, contentType, contentBytes: attachmentBase64 },
+        ],
+      },
+      saveToSentItems: true,
+    }),
+  }).then((r) => {
+    if (!r.ok) return r.text().then((t) => { throw new Error(t) })
+  })
+}
+
 function attendanceStatus(hours: number): string {
   if (hours >= 8) return 'Present'
   if (hours >= 4) return 'Half day'
@@ -141,13 +174,27 @@ Deno.serve(async (req) => {
       )
     }
 
-    const body = (await req.json().catch(() => ({}))) as { startDate?: string; endDate?: string }
-    const end = body.endDate
-      ? endOfDay(parseISO(body.endDate))
-      : endOfDay(new Date())
-    const start = body.startDate
-      ? startOfDay(parseISO(body.startDate))
-      : startOfDay(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    const body = (await req.json().catch(() => ({}))) as { startDate?: string; endDate?: string; weekly?: boolean }
+    const isWeekly = body.weekly === true
+    if (isWeekly && role !== 'admin') {
+      return new Response(
+        JSON.stringify({ error: 'Only admins can trigger weekly Excel reports' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+    let start: Date
+    let end: Date
+    if (isWeekly) {
+      const today = new Date()
+      const lastMonday = startOfWeek(today, { weekStartsOn: 1 })
+      const prevWeekMonday = subWeeks(lastMonday, 1)
+      const prevWeekSaturday = addDays(prevWeekMonday, 5)
+      start = startOfDay(prevWeekMonday)
+      end = endOfDay(prevWeekSaturday)
+    } else {
+      end = body.endDate ? endOfDay(parseISO(body.endDate)) : endOfDay(new Date())
+      start = body.startDate ? startOfDay(parseISO(body.startDate)) : startOfDay(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    }
     const startStr = format(start, 'yyyy-MM-dd')
     const endStr = format(end, 'yyyy-MM-dd')
 
@@ -334,6 +381,68 @@ Deno.serve(async (req) => {
         leaveRowsHtml = '<tr><td colspan="4" style="padding:12px;color:#666">No approved leaves in this period.</td></tr>'
       }
 
+      if (isWeekly) {
+        const mod = await import('https://esm.sh/xlsx@0.18.5') as { default?: { utils: unknown; write: unknown }; utils?: unknown; write?: unknown }
+        const XLSX = (mod.utils ? mod : mod.default) as { utils: { book_new: () => unknown; book_append_sheet: (w: unknown, s: unknown, n: string) => void; aoa_to_sheet: (d: (string | number)[][]) => unknown }; write: (w: unknown, o: { type: string; bookType: string }) => string }
+        if (!XLSX?.utils) throw new Error('XLSX module missing utils')
+        const wb = XLSX.utils.book_new()
+        const dayNames = days.map((d) => format(d, 'EEE'))
+        const summaryData: (string | number)[][] = [['Employee', 'Total Week Hours']]
+        for (const userId of teamIds) {
+          const name = userNames.get(userId) || 'Unknown'
+          let weekTotal = 0
+          for (const d of days) {
+            const dateStr = format(d, 'yyyy-MM-dd')
+            weekTotal += byUserDay.get(`${userId}-${dateStr}`)?.hours ?? 0
+          }
+          summaryData.push([name, Math.round(weekTotal * 100) / 100])
+        }
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryData), 'Summary')
+        const projData: (string | number)[][] = [['Employee', 'Project', 'Hours']]
+        for (const [userId, projMap] of byUserProject) {
+          const name = userNames.get(userId) || 'Unknown'
+          for (const [projName, h] of projMap) projData.push([name, projName, Math.round(h * 100) / 100])
+        }
+        if (projData.length === 1) projData.push(['No entries', '', ''])
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(projData), 'Project-wise')
+        const leaveData: string[][] = [['Employee', 'Leave Type', 'Start', 'End', 'Reason']]
+        for (const userId of teamIds) {
+          const name = userNames.get(userId) || 'Unknown'
+          const userLeaves = leavesByUser.get(userId) || []
+          if (userLeaves.length === 0) leaveData.push([name, 'None', '', '', ''])
+          else userLeaves.forEach((lev) => leaveData.push([name, lev.typeName, lev.start, lev.end, lev.reason || '']))
+        }
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(leaveData), 'Leaves')
+        const dayWiseHeader = ['Employee', ...dayNames, 'Total']
+        const dayWiseData: (string | number)[][] = [dayWiseHeader]
+        for (const userId of teamIds) {
+          const name = userNames.get(userId) || 'Unknown'
+          const row: (string | number)[] = [name]
+          let total = 0
+          for (const d of days) {
+            const h = byUserDay.get(`${userId}-${format(d, 'yyyy-MM-dd')}`)?.hours ?? 0
+            total += h
+            row.push(Math.round(h * 100) / 100)
+          }
+          row.push(Math.round(total * 100) / 100)
+          dayWiseData.push(row)
+        }
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dayWiseData), 'Day-wise')
+        const xlsxBase64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' })
+        const attachmentName = `TimeFlow_Report_${startStr}_to_${endStr}.xlsx`
+        const subject = `TimeFlow Weekly Report: ${startStr} to ${endStr}`
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Segoe UI,Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px"><h1 style="color:#2563eb">TimeFlow Weekly Report</h1><p>Hi ${manager.full_name || 'Manager'},</p><p>Please find attached the Excel report for your team for the week <strong>${startStr}</strong> to <strong>${endStr}</strong> (Monday–Saturday).</p><p style="margin-top:28px;font-size:12px;color:#64748b">This is an automated weekly report from TimeFlow.</p></body></html>`
+        const contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        const recipients = [managerEmail, ...extraRecipients.filter((e) => e && e !== managerEmail)]
+        for (const toEmail of recipients) {
+          try {
+            await sendGraphMailWithAttachment(token, fromEmail, toEmail, subject, html, attachmentName, xlsxBase64, contentType)
+            sent++
+          } catch (e) {
+            console.error(`Failed to send weekly report to ${toEmail}:`, e)
+          }
+        }
+      } else {
       const subject = `TimeFlow Reports: ${startStr} to ${endStr}`
       const html = `
 <!DOCTYPE html>
@@ -401,10 +510,11 @@ Deno.serve(async (req) => {
         }
       }
     }
+    }
 
     return new Response(
       JSON.stringify({
-        message: `Reports sent to ${sent} manager(s).`,
+        message: isWeekly ? `Weekly reports sent to ${sent} recipient(s).` : `Reports sent to ${sent} manager(s).`,
         sent,
         period: { startDate: startStr, endDate: endStr },
       }),
@@ -412,8 +522,9 @@ Deno.serve(async (req) => {
     )
   } catch (err) {
     console.error(err)
+    const message = err instanceof Error ? err.message : 'Unknown error'
     return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }),
+      JSON.stringify({ error: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }

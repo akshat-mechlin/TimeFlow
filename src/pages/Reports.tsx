@@ -565,9 +565,11 @@ export default function Reports({ user }: ReportsProps) {
         showError('Please sign in again to send weekly reports.')
         return
       }
-      const { data, error } = await supabase.functions.invoke('send-weekly-reports', {
-        body: {},
-        headers: { Authorization: `Bearer ${token}` },
+      const { data, error } = await supabase.functions.invoke('send-manager-reports', {
+        body: { weekly: true },
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       })
       if (error) throw error
       const result = data as { error?: string; message?: string; sent?: number; period?: { startDate: string; endDate: string } }
