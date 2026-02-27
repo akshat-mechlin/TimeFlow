@@ -555,7 +555,7 @@ export default function Reports({ user }: ReportsProps) {
   }
 
   const sendWeeklyReportsNow = async () => {
-    if (user.role !== 'admin') return
+    if (user.role !== 'admin' && user.role !== 'manager') return
     setSendingWeekly(true)
     try {
       const { data: { session }, error: sessionError } = await supabase.auth.refreshSession()
@@ -688,7 +688,7 @@ export default function Reports({ user }: ReportsProps) {
       {(user.role === 'admin' || user.role === 'manager') && (
         <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
           <div className="flex items-center justify-between">
-            <div>
+            <div className='w-[70%]'>
               <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-1 flex items-center gap-2">
                 <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                 Email reports to managers
@@ -696,38 +696,43 @@ export default function Reports({ user }: ReportsProps) {
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 {user.role === 'admin'
                   ? "Send attendance and tracker reports for the selected date range to each manager (Microsoft 365). Each manager receives their team's report; HR and Payroll also receive copies if configured in Admin → System Settings."
-                  : "Send your team's attendance and tracker report for the selected date range to your email (Microsoft 365)."}
+                  : "Send your team's weekly report (previous Monday–Saturday) to your email. Use the weekly report button below."}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                Period: {format(dateRange.start, 'MMM d, yyyy')} – {format(dateRange.end, 'MMM d, yyyy')}
+                {user.role === 'admin'
+                  ? `Period: ${format(dateRange.start, 'MMM d, yyyy')} – ${format(dateRange.end, 'MMM d, yyyy')}`
+                  : 'Weekly report: previous Monday–Saturday (no attachment).'}
               </p>
             </div>
             <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={sendReportsToManagers}
-              disabled={sendingReports}
-              className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {sendingReports ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Sending…</span>
-                </>
-              ) : (
-                <>
-                  <Mail className="w-4 h-4" />
-                  <span>Send reports now</span>
-                </>
-              )}
-            </button>
             {user.role === 'admin' && (
+              <button
+                type="button"
+                onClick={sendReportsToManagers}
+                disabled={sendingReports}
+                className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Send report for selected date range (e.g. one month) to all managers"
+              >
+                {sendingReports ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Sending…</span>
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-4 h-4" />
+                    <span>Send report now</span>
+                  </>
+                )}
+              </button>
+            )}
+            {(user.role === 'admin' || user.role === 'manager') && (
               <button
                 type="button"
                 onClick={sendWeeklyReportsNow}
                 disabled={sendingWeekly}
                 className="flex items-center space-x-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Send previous week (Mon–Sat) report as Excel to all managers and HR/Payroll"
+                title={user.role === 'admin' ? 'Send previous week (Mon–Sat) report to all managers and HR/Payroll' : 'Send your team’s weekly report to your email'}
               >
                 {sendingWeekly ? (
                   <>

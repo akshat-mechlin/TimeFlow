@@ -1,5 +1,5 @@
 // Send attendance and tracker reports to each manager via Microsoft 365 (Graph API)
-// Invoke with body: { startDate?, endDate? } for date-range HTML report, or { weekly: true } for previous-week Excel (admin only)
+// Invoke with body: { startDate?, endDate? } for date-range HTML report (admin only), or { weekly: true } for previous-week HTML report (manager or admin)
 // Requires: MICROSOFT_TENANT_ID, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_FROM_EMAIL
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
@@ -80,43 +80,111 @@ function sendGraphMail(
   })
 }
 
-function sendGraphMailWithAttachment(
-  token: string,
-  fromEmail: string,
-  toEmail: string,
-  subject: string,
-  htmlBody: string,
-  attachmentName: string,
-  attachmentBase64: string,
-  contentType: string
-): Promise<void> {
-  const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(fromEmail)}/sendMail`
-  return fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      message: {
-        subject,
-        body: { contentType: 'HTML', content: htmlBody },
-        toRecipients: [{ emailAddress: { address: toEmail } }],
-        attachments: [
-          { '@odata.type': '#microsoft.graph.fileAttachment', name: attachmentName, contentType, contentBytes: attachmentBase64 },
-        ],
-      },
-      saveToSentItems: true,
-    }),
-  }).then((r) => {
-    if (!r.ok) return r.text().then((t) => { throw new Error(t) })
-  })
-}
-
 function attendanceStatus(hours: number): string {
   if (hours >= 8) return 'Present'
   if (hours >= 4) return 'Half day'
   return 'Absent'
+}
+
+function buildReportHtml(
+  manager: Profile,
+  startStr: string,
+  endStr: string,
+  dateHeaders: string,
+  attendanceRows: string,
+  trackerRows: string,
+  leaveRowsHtml: string,
+  isWeekly: boolean,
+  recipientLabel?: string,
+  isAllEmployees?: boolean
+): string {
+  const greeting = recipientLabel ?? manager.full_name ?? 'Manager'
+  const scopeText = isAllEmployees ? 'for all employees' : 'for your team'
+  const periodLabel = isWeekly
+    ? `Week: ${startStr} to ${endStr} (Mon–Sat)`
+    : `Period: ${startStr} to ${endStr}`
+  const reportTitle = isWeekly ? 'Weekly Team Report' : 'TimeFlow Reports'
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${reportTitle} – ${startStr} to ${endStr}</title>
+</head>
+<body style="margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;color:#1e293b;">
+  <div style="max-width:960px;margin:0 auto;padding:24px 16px;">
+    <div style="background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%);border-radius:12px;padding:24px;margin-bottom:24px;color:#fff;">
+      <h1 style="margin:0 0 4px 0;font-size:24px;font-weight:700;">TimeFlow</h1>
+      <p style="margin:0;font-size:14px;opacity:0.95;">${reportTitle}</p>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+      <p style="margin:0 0 8px 0;font-size:16px;">Hi ${greeting},</p>
+      <p style="margin:0;font-size:14px;color:#64748b;">Below is the <strong>Attendance</strong>, <strong>Time by project</strong>, and <strong>Leaves</strong> ${scopeText} for ${periodLabel}.</p>
+    </div>
+
+    <div style="background:#fff;border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+      <div style="padding:16px 20px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+        <h2 style="margin:0;font-size:16px;font-weight:600;color:#1e40af;">Attendance</h2>
+        <p style="margin:4px 0 0 0;font-size:12px;color:#64748b;">Status and hours per day</p>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="background:#e0e7ff;">
+              <th style="border:1px solid #c7d2fe;padding:10px 8px;text-align:left;font-weight:600;color:#3730a3;">Employee</th>
+              ${dateHeaders}
+              <th style="border:1px solid #c7d2fe;padding:10px 8px;text-align:center;font-weight:600;color:#3730a3;">Total</th>
+            </tr>
+          </thead>
+          <tbody>${attendanceRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="background:#fff;border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+      <div style="padding:16px 20px;background:#f0fdf4;border-bottom:1px solid #bbf7d0;">
+        <h2 style="margin:0;font-size:16px;font-weight:600;color:#166534;">Time by project</h2>
+        <p style="margin:4px 0 0 0;font-size:12px;color:#64748b;">Hours logged per project per employee</p>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="background:#dcfce7;">
+              <th style="border:1px solid #bbf7d0;padding:10px 8px;text-align:left;font-weight:600;color:#166534;">Employee</th>
+              <th style="border:1px solid #bbf7d0;padding:10px 8px;text-align:left;font-weight:600;color:#166534;">Project</th>
+              <th style="border:1px solid #bbf7d0;padding:10px 8px;text-align:right;font-weight:600;color:#166534;">Hours</th>
+            </tr>
+          </thead>
+          <tbody>${trackerRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="background:#fff;border-radius:12px;overflow:hidden;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+      <div style="padding:16px 20px;background:#fef3c7;border-bottom:1px solid #fde68a;">
+        <h2 style="margin:0;font-size:16px;font-weight:600;color:#92400e;">Approved leaves</h2>
+        <p style="margin:4px 0 0 0;font-size:12px;color:#64748b;">Leave requests approved in this period</p>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="background:#fef9c3;">
+              <th style="border:1px solid #fde68a;padding:10px 8px;text-align:left;font-weight:600;color:#92400e;">Employee</th>
+              <th style="border:1px solid #fde68a;padding:10px 8px;text-align:left;font-weight:600;color:#92400e;">Leave type</th>
+              <th style="border:1px solid #fde68a;padding:10px 8px;text-align:left;font-weight:600;color:#92400e;">Period</th>
+              <th style="border:1px solid #fde68a;padding:10px 8px;text-align:left;font-weight:600;color:#92400e;">Reason</th>
+            </tr>
+          </thead>
+          <tbody>${leaveRowsHtml}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <p style="margin:0;font-size:12px;color:#94a3b8;">This is an automated report from TimeFlow. You can view full details in the app.</p>
+  </div>
+</body>
+</html>`
 }
 
 Deno.serve(async (req) => {
@@ -176,9 +244,10 @@ Deno.serve(async (req) => {
 
     const body = (await req.json().catch(() => ({}))) as { startDate?: string; endDate?: string; weekly?: boolean }
     const isWeekly = body.weekly === true
-    if (isWeekly && role !== 'admin') {
+    // Date-range report (e.g. one month): admin only. Weekly report: manager or admin.
+    if (!isWeekly && role !== 'admin') {
       return new Response(
-        JSON.stringify({ error: 'Only admins can trigger weekly Excel reports' }),
+        JSON.stringify({ error: 'Only admins can send date-range (e.g. monthly) reports. Use "Send weekly report now" for your team.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -212,7 +281,6 @@ Deno.serve(async (req) => {
       if (row.setting_key === 'report_hr_emails') hrEmails.push(...list)
       if (row.setting_key === 'report_payroll_emails') payrollEmails.push(...list)
     })
-    const extraRecipients = [...new Set([...hrEmails, ...payrollEmails])]
 
     // If caller is a manager, send only to themselves. If admin, send to all managers.
     let managers: Profile[]
@@ -231,13 +299,7 @@ Deno.serve(async (req) => {
         .select('id, full_name, email')
         .eq('role', 'manager')
         .not('email', 'is', null)
-      if (!allManagers || allManagers.length === 0) {
-        return new Response(
-          JSON.stringify({ message: 'No managers with email found.', sent: 0 }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        )
-      }
-      managers = allManagers as Profile[]
+      managers = (allManagers || []) as Profile[]
     }
 
     const token = await getMicrosoftToken(tenantId, clientId, clientSecret)
@@ -325,7 +387,7 @@ Deno.serve(async (req) => {
       })
 
       let attendanceRows = ''
-      for (const userId of teamIds) {
+      teamIds.forEach((userId, rowIndex) => {
         const name = userNames.get(userId) || 'Unknown'
         let rowCells = ''
         let weekTotal = 0
@@ -336,15 +398,16 @@ Deno.serve(async (req) => {
           const h = cell?.hours ?? 0
           const status = cell?.status ?? 'Absent'
           weekTotal += h
-          rowCells += `<td style="border:1px solid #ddd;padding:6px;text-align:center">${status}</td><td style="border:1px solid #ddd;padding:6px;text-align:center">${h > 0 ? h.toFixed(1) + 'h' : '—'}</td>`
+          rowCells += `<td style="border:1px solid #e2e8f0;padding:8px;text-align:center;font-size:12px">${status}</td><td style="border:1px solid #e2e8f0;padding:8px;text-align:center;font-size:12px">${h > 0 ? h.toFixed(1) + 'h' : '—'}</td>`
         }
-        attendanceRows += `<tr><td style="border:1px solid #ddd;padding:6px">${name}</td>${rowCells}<td style="border:1px solid #ddd;padding:6px;text-align:center">${weekTotal > 0 ? weekTotal.toFixed(1) + 'h' : '—'}</td></tr>`
-      }
+        const rowBg = rowIndex % 2 === 1 ? 'background:#f8fafc' : ''
+        attendanceRows += `<tr style="${rowBg}"><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${name}</td>${rowCells}<td style="border:1px solid #e2e8f0;padding:8px;text-align:center;font-size:12px;font-weight:600">${weekTotal > 0 ? weekTotal.toFixed(1) + 'h' : '—'}</td></tr>`
+      })
 
       const dateHeaders = days
         .map(
           (d) =>
-            `<th colspan="2" style="border:1px solid #ddd;padding:6px">${format(d, 'MMM d')}</th>`
+            `<th colspan="2" style="border:1px solid #c7d2fe;padding:8px;text-align:center;font-size:12px;font-weight:600;color:#3730a3">${format(d, 'MMM d')}</th>`
         )
         .join('')
 
@@ -355,14 +418,14 @@ Deno.serve(async (req) => {
         const projects = Array.from(projMap.entries())
         projects.forEach(([p, h], i) => {
           totalH += h
-          trackerRows += `<tr><td style="border:1px solid #ddd;padding:6px">${i === 0 ? name : ''}</td><td style="border:1px solid #ddd;padding:6px">${p}</td><td style="border:1px solid #ddd;padding:6px;text-align:right">${h.toFixed(1)}h</td></tr>`
+          trackerRows += `<tr><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${i === 0 ? name : ''}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${p}</td><td style="border:1px solid #e2e8f0;padding:8px;text-align:right;font-size:12px">${h.toFixed(1)}h</td></tr>`
         })
         if (projects.length > 0) {
-          trackerRows += `<tr style="background:#f8fafc"><td style="border:1px solid #ddd;padding:6px"></td><td style="border:1px solid #ddd;padding:6px;font-weight:bold">Subtotal</td><td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:bold">${totalH.toFixed(1)}h</td></tr>`
+          trackerRows += `<tr style="background:#f0fdf4"><td style="border:1px solid #e2e8f0;padding:8px"></td><td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold;font-size:12px">Subtotal</td><td style="border:1px solid #e2e8f0;padding:8px;text-align:right;font-weight:bold;font-size:12px">${totalH.toFixed(1)}h</td></tr>`
         }
       }
       if (trackerRows === '') {
-        trackerRows = '<tr><td colspan="3" style="padding:12px;color:#666">No time entries in this period.</td></tr>'
+        trackerRows = '<tr><td colspan="3" style="padding:16px;color:#64748b;font-size:12px">No time entries in this period.</td></tr>'
       }
 
       let leaveRowsHtml = ''
@@ -370,151 +433,214 @@ Deno.serve(async (req) => {
         const name = userNames.get(userId) || 'Unknown'
         const userLeaves = leavesByUser.get(userId) || []
         if (userLeaves.length === 0) {
-          leaveRowsHtml += `<tr><td style="border:1px solid #ddd;padding:6px">${name}</td><td colspan="3" style="border:1px solid #ddd;padding:6px;color:#666">None</td></tr>`
+          leaveRowsHtml += `<tr><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${name}</td><td colspan="3" style="border:1px solid #e2e8f0;padding:8px;color:#64748b;font-size:12px">None</td></tr>`
         } else {
           userLeaves.forEach((lev, i) => {
-            leaveRowsHtml += `<tr><td style="border:1px solid #ddd;padding:6px">${i === 0 ? name : ''}</td><td style="border:1px solid #ddd;padding:6px">${lev.typeName}</td><td style="border:1px solid #ddd;padding:6px">${lev.start} to ${lev.end}</td><td style="border:1px solid #ddd;padding:6px">${lev.reason || '—'}</td></tr>`
+            leaveRowsHtml += `<tr><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${i === 0 ? name : ''}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${lev.typeName}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${lev.start} to ${lev.end}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${lev.reason || '—'}</td></tr>`
           })
         }
       }
       if (leaveRowsHtml === '') {
-        leaveRowsHtml = '<tr><td colspan="4" style="padding:12px;color:#666">No approved leaves in this period.</td></tr>'
+        leaveRowsHtml = '<tr><td colspan="4" style="padding:16px;color:#64748b;font-size:12px">No approved leaves in this period.</td></tr>'
       }
 
       if (isWeekly) {
-        const mod = await import('https://esm.sh/xlsx@0.18.5') as { default?: { utils: unknown; write: unknown }; utils?: unknown; write?: unknown }
-        const XLSX = (mod.utils ? mod : mod.default) as { utils: { book_new: () => unknown; book_append_sheet: (w: unknown, s: unknown, n: string) => void; aoa_to_sheet: (d: (string | number)[][]) => unknown }; write: (w: unknown, o: { type: string; bookType: string }) => string }
-        if (!XLSX?.utils) throw new Error('XLSX module missing utils')
-        const wb = XLSX.utils.book_new()
-        const dayNames = days.map((d) => format(d, 'EEE'))
-        const summaryData: (string | number)[][] = [['Employee', 'Total Week Hours']]
-        for (const userId of teamIds) {
-          const name = userNames.get(userId) || 'Unknown'
-          let weekTotal = 0
-          for (const d of days) {
-            const dateStr = format(d, 'yyyy-MM-dd')
-            weekTotal += byUserDay.get(`${userId}-${dateStr}`)?.hours ?? 0
-          }
-          summaryData.push([name, Math.round(weekTotal * 100) / 100])
-        }
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryData), 'Summary')
-        const projData: (string | number)[][] = [['Employee', 'Project', 'Hours']]
-        for (const [userId, projMap] of byUserProject) {
-          const name = userNames.get(userId) || 'Unknown'
-          for (const [projName, h] of projMap) projData.push([name, projName, Math.round(h * 100) / 100])
-        }
-        if (projData.length === 1) projData.push(['No entries', '', ''])
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(projData), 'Project-wise')
-        const leaveData: string[][] = [['Employee', 'Leave Type', 'Start', 'End', 'Reason']]
-        for (const userId of teamIds) {
-          const name = userNames.get(userId) || 'Unknown'
-          const userLeaves = leavesByUser.get(userId) || []
-          if (userLeaves.length === 0) leaveData.push([name, 'None', '', '', ''])
-          else userLeaves.forEach((lev) => leaveData.push([name, lev.typeName, lev.start, lev.end, lev.reason || '']))
-        }
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(leaveData), 'Leaves')
-        const dayWiseHeader = ['Employee', ...dayNames, 'Total']
-        const dayWiseData: (string | number)[][] = [dayWiseHeader]
-        for (const userId of teamIds) {
-          const name = userNames.get(userId) || 'Unknown'
-          const row: (string | number)[] = [name]
-          let total = 0
-          for (const d of days) {
-            const h = byUserDay.get(`${userId}-${format(d, 'yyyy-MM-dd')}`)?.hours ?? 0
-            total += h
-            row.push(Math.round(h * 100) / 100)
-          }
-          row.push(Math.round(total * 100) / 100)
-          dayWiseData.push(row)
-        }
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dayWiseData), 'Day-wise')
-        const xlsxBase64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' })
-        const attachmentName = `TimeFlow_Report_${startStr}_to_${endStr}.xlsx`
         const subject = `TimeFlow Weekly Report: ${startStr} to ${endStr}`
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family:Segoe UI,Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px"><h1 style="color:#2563eb">TimeFlow Weekly Report</h1><p>Hi ${manager.full_name || 'Manager'},</p><p>Please find attached the Excel report for your team for the week <strong>${startStr}</strong> to <strong>${endStr}</strong> (Monday–Saturday).</p><p style="margin-top:28px;font-size:12px;color:#64748b">This is an automated weekly report from TimeFlow.</p></body></html>`
-        const contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        const recipients = [managerEmail, ...extraRecipients.filter((e) => e && e !== managerEmail)]
-        for (const toEmail of recipients) {
-          try {
-            await sendGraphMailWithAttachment(token, fromEmail, toEmail, subject, html, attachmentName, xlsxBase64, contentType)
-            sent++
-          } catch (e) {
-            console.error(`Failed to send weekly report to ${toEmail}:`, e)
-          }
-        }
-      } else {
-      const subject = `TimeFlow Reports: ${startStr} to ${endStr}`
-      const html = `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>${subject}</title></head>
-<body style="font-family:Segoe UI,Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px;color:#333">
-  <h1 style="color:#2563eb">TimeFlow Reports</h1>
-  <p>Hi ${manager.full_name || 'Manager'},</p>
-  <p>Please find below the <strong>Attendance</strong> and <strong>Tracker</strong> reports for your team for the period <strong>${startStr}</strong> to <strong>${endStr}</strong>.</p>
-
-  <h2 style="color:#1e40af;margin-top:28px">Attendance Report</h2>
-  <table style="border-collapse:collapse;width:100%;font-size:13px">
-    <thead>
-      <tr style="background:#f1f5f9">
-        <th style="border:1px solid #ddd;padding:8px">Employee</th>
-        ${dateHeaders}
-        <th style="border:1px solid #ddd;padding:8px">Total</th>
-      </tr>
-    </thead>
-    <tbody>${attendanceRows}</tbody>
-  </table>
-
-  <h2 style="color:#1e40af;margin-top:28px">Tracker Report (Time by project)</h2>
-  <table style="border-collapse:collapse;width:100%;font-size:13px">
-    <thead>
-      <tr style="background:#f1f5f9">
-        <th style="border:1px solid #ddd;padding:8px">Employee</th>
-        <th style="border:1px solid #ddd;padding:8px">Project</th>
-        <th style="border:1px solid #ddd;padding:8px">Hours</th>
-      </tr>
-    </thead>
-    <tbody>${trackerRows}</tbody>
-  </table>
-
-  <h2 style="color:#1e40af;margin-top:28px">Leaves (approved)</h2>
-  <table style="border-collapse:collapse;width:100%;font-size:13px">
-    <thead>
-      <tr style="background:#f1f5f9">
-        <th style="border:1px solid #ddd;padding:8px">Employee</th>
-        <th style="border:1px solid #ddd;padding:8px">Leave type</th>
-        <th style="border:1px solid #ddd;padding:8px">Period</th>
-        <th style="border:1px solid #ddd;padding:8px">Reason</th>
-      </tr>
-    </thead>
-    <tbody>${leaveRowsHtml}</tbody>
-  </table>
-
-  <p style="margin-top:28px;font-size:12px;color:#64748b">This is an automated email from TimeFlow. You can view full reports in the app.</p>
-</body>
-</html>`
-
-      try {
-        await sendGraphMail(token, fromEmail, managerEmail, subject, html)
-        sent++
-      } catch (e) {
-        console.error(`Failed to send to ${managerEmail}:`, e)
-      }
-      for (const toEmail of extraRecipients) {
-        if (!toEmail || toEmail === managerEmail) continue
+        const html = buildReportHtml(manager, startStr, endStr, dateHeaders, attendanceRows, trackerRows, leaveRowsHtml, true)
         try {
-          await sendGraphMail(token, fromEmail, toEmail, subject, html)
+          await sendGraphMail(token, fromEmail, managerEmail, subject, html)
           sent++
         } catch (e) {
-          console.error(`Failed to send to ${toEmail}:`, e)
+          console.error(`Failed to send weekly report to ${managerEmail}:`, e)
+        }
+      } else {
+        const subject = `TimeFlow Reports: ${startStr} to ${endStr}`
+        const html = buildReportHtml(manager, startStr, endStr, dateHeaders, attendanceRows, trackerRows, leaveRowsHtml, false)
+        try {
+          await sendGraphMail(token, fromEmail, managerEmail, subject, html)
+          sent++
+        } catch (e) {
+          console.error(`Failed to send to ${managerEmail}:`, e)
         }
       }
     }
+
+    // HR and Payroll: one organization-wide report (all employees) each, no manager filter. Greeting "HR Team" / "Payroll Team".
+    const allRecipientEmails = [
+      ...hrEmails.map((e) => ({ email: e.trim(), label: 'HR Team' as const })),
+      ...payrollEmails.map((e) => ({ email: e.trim(), label: 'Payroll Team' as const })),
+    ].filter((x) => x.email)
+    // Dedupe by email (if same address in both lists, send once with first label)
+    const seenEmails = new Set<string>()
+    const uniqueRecipients = allRecipientEmails.filter((x) => {
+      if (seenEmails.has(x.email)) return false
+      seenEmails.add(x.email)
+      return true
+    })
+    if (uniqueRecipients.length > 0) {
+      const { data: allProfiles } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .order('full_name')
+      const teamIdsAll = (allProfiles || []).map((p: { id: string }) => p.id)
+      const userNamesAll = new Map<string, string>()
+      ;(allProfiles || []).forEach((p: { id: string; full_name: string | null }) => {
+        if (p.full_name) userNamesAll.set(p.id, p.full_name)
+      })
+
+      const { data: timeEntriesAll } = await supabase
+        .from('time_entries')
+        .select(`
+          id, user_id, start_time, end_time, duration, description,
+          profile:profiles!time_entries_user_id_fkey(id, full_name, email),
+          project_time_entries(project_id, billable, projects(name))
+        `)
+        .gte('start_time', start.toISOString())
+        .lte('start_time', end.toISOString())
+        .in('user_id', teamIdsAll)
+        .order('start_time', { ascending: true })
+      const entriesAll = (timeEntriesAll || []) as TimeEntry[]
+
+      const { data: leaveRowsAll } = await supabase
+        .from('leave_requests')
+        .select('user_id, start_date, end_date, reason, leave_types(name)')
+        .eq('status', 'approved')
+        .lte('start_date', endStr)
+        .gte('end_date', startStr)
+        .in('user_id', teamIdsAll)
+      const leavesByUserAll = new Map<string, Array<{ start: string; end: string; typeName: string; reason: string }>>()
+      ;(leaveRowsAll || []).forEach((l: { user_id: string; start_date: string; end_date: string; reason: string; leave_types: { name: string } | null }) => {
+        const list = leavesByUserAll.get(l.user_id) || []
+        list.push({
+          start: l.start_date,
+          end: l.end_date,
+          typeName: l.leave_types?.name || 'Leave',
+          reason: l.reason || '',
+        })
+        leavesByUserAll.set(l.user_id, list)
+      })
+
+      const daysAll = eachDayOfInterval({ start, end })
+      const byUserDayAll = new Map<string, { hours: number; status: string }>()
+      const byUserProjectAll = new Map<string, Map<string, number>>()
+
+      for (const entry of entriesAll) {
+        const dateStr = format(new Date(entry.start_time), 'yyyy-MM-dd')
+        const key = `${entry.user_id}-${dateStr}`
+        const hours = (entry.duration || 0) / 3600
+        const existing = byUserDayAll.get(key)
+        const totalHours = (existing?.hours ?? 0) + hours
+        byUserDayAll.set(key, {
+          hours: totalHours,
+          status: attendanceStatus(totalHours),
+        })
+        if (!byUserProjectAll.has(entry.user_id)) {
+          byUserProjectAll.set(entry.user_id, new Map())
+        }
+        const userProj = byUserProjectAll.get(entry.user_id)!
+        const projNames = entry.project_time_entries?.map(
+          (pte) => pte.projects?.name || 'Default Project'
+        ) || ['Default Project']
+        const n = projNames.length || 1
+        const hoursPerProject = hours / n
+        for (const p of projNames) {
+          userProj.set(p, (userProj.get(p) || 0) + hoursPerProject)
+        }
+      }
+      entriesAll.forEach((e) => {
+        if (e.profile?.full_name) userNamesAll.set(e.user_id, e.profile.full_name)
+      })
+
+      let attendanceRowsAll = ''
+      teamIdsAll.forEach((userId, rowIndex) => {
+        const name = userNamesAll.get(userId) || 'Unknown'
+        let rowCells = ''
+        let weekTotal = 0
+        for (const d of daysAll) {
+          const dateStr = format(d, 'yyyy-MM-dd')
+          const dayKey = `${userId}-${dateStr}`
+          const cell = byUserDayAll.get(dayKey)
+          const h = cell?.hours ?? 0
+          const status = cell?.status ?? 'Absent'
+          weekTotal += h
+          rowCells += `<td style="border:1px solid #e2e8f0;padding:8px;text-align:center;font-size:12px">${status}</td><td style="border:1px solid #e2e8f0;padding:8px;text-align:center;font-size:12px">${h > 0 ? h.toFixed(1) + 'h' : '—'}</td>`
+        }
+        const rowBg = rowIndex % 2 === 1 ? 'background:#f8fafc' : ''
+        attendanceRowsAll += `<tr style="${rowBg}"><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${name}</td>${rowCells}<td style="border:1px solid #e2e8f0;padding:8px;text-align:center;font-size:12px;font-weight:600">${weekTotal > 0 ? weekTotal.toFixed(1) + 'h' : '—'}</td></tr>`
+      })
+
+      const dateHeadersAll = daysAll
+        .map(
+          (d) =>
+            `<th colspan="2" style="border:1px solid #c7d2fe;padding:8px;text-align:center;font-size:12px;font-weight:600;color:#3730a3">${format(d, 'MMM d')}</th>`
+        )
+        .join('')
+
+      let trackerRowsAll = ''
+      for (const [userId, projMap] of byUserProjectAll) {
+        const name = userNamesAll.get(userId) || 'Unknown'
+        let totalH = 0
+        const projects = Array.from(projMap.entries())
+        projects.forEach(([p, h], i) => {
+          totalH += h
+          trackerRowsAll += `<tr><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${i === 0 ? name : ''}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${p}</td><td style="border:1px solid #e2e8f0;padding:8px;text-align:right;font-size:12px">${h.toFixed(1)}h</td></tr>`
+        })
+        if (projects.length > 0) {
+          trackerRowsAll += `<tr style="background:#f0fdf4"><td style="border:1px solid #e2e8f0;padding:8px"></td><td style="border:1px solid #e2e8f0;padding:8px;font-weight:bold;font-size:12px">Subtotal</td><td style="border:1px solid #e2e8f0;padding:8px;text-align:right;font-weight:bold;font-size:12px">${totalH.toFixed(1)}h</td></tr>`
+        }
+      }
+      if (trackerRowsAll === '') {
+        trackerRowsAll = '<tr><td colspan="3" style="padding:16px;color:#64748b;font-size:12px">No time entries in this period.</td></tr>'
+      }
+
+      let leaveRowsHtmlAll = ''
+      for (const userId of teamIdsAll) {
+        const name = userNamesAll.get(userId) || 'Unknown'
+        const userLeaves = leavesByUserAll.get(userId) || []
+        if (userLeaves.length === 0) {
+          leaveRowsHtmlAll += `<tr><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${name}</td><td colspan="3" style="border:1px solid #e2e8f0;padding:8px;color:#64748b;font-size:12px">None</td></tr>`
+        } else {
+          userLeaves.forEach((lev, i) => {
+            leaveRowsHtmlAll += `<tr><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${i === 0 ? name : ''}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${lev.typeName}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${lev.start} to ${lev.end}</td><td style="border:1px solid #e2e8f0;padding:8px;font-size:12px">${lev.reason || '—'}</td></tr>`
+          })
+        }
+      }
+      if (leaveRowsHtmlAll === '') {
+        leaveRowsHtmlAll = '<tr><td colspan="4" style="padding:16px;color:#64748b;font-size:12px">No approved leaves in this period.</td></tr>'
+      }
+
+      const dummyProfile: Profile = { id: '', full_name: null, email: null, manager_id: null, role: 'employee' }
+      const subjectHrPayroll = isWeekly
+        ? `TimeFlow Weekly Report (All employees): ${startStr} to ${endStr}`
+        : `TimeFlow Reports (All employees): ${startStr} to ${endStr}`
+
+      for (const { email: toEmail, label } of uniqueRecipients) {
+        const html = buildReportHtml(
+          dummyProfile,
+          startStr,
+          endStr,
+          dateHeadersAll,
+          attendanceRowsAll,
+          trackerRowsAll,
+          leaveRowsHtmlAll,
+          isWeekly,
+          label,
+          true
+        )
+        try {
+          await sendGraphMail(token, fromEmail, toEmail, subjectHrPayroll, html)
+          sent++
+        } catch (e) {
+          console.error(`Failed to send all-employees report to ${toEmail}:`, e)
+        }
+      }
     }
 
     return new Response(
       JSON.stringify({
-        message: isWeekly ? `Weekly reports sent to ${sent} recipient(s).` : `Reports sent to ${sent} manager(s).`,
+        message: isWeekly
+          ? `Weekly reports sent to ${sent} recipient(s).`
+          : `Reports sent to ${sent} recipient(s) (managers and HR/Payroll if configured).`,
         sent,
         period: { startDate: startStr, endDate: endStr },
       }),
