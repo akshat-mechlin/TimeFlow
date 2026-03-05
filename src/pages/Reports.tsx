@@ -687,10 +687,10 @@ export default function Reports({ user }: ReportsProps) {
       {/* Email reports (Admin: to all managers; Manager: to themselves) - Microsoft 365 */}
       {(user.role === 'admin' || user.role === 'manager') && (
         <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 backdrop-blur-sm">
-          <div className="flex items-center justify-between">
-            <div className='w-[70%]'>
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="w-full min-w-0 md:w-[70%]">
               <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-1 flex items-center gap-2">
-                <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
                 Email reports to managers
               </h3>
               <p className="text-sm text-gray-600 dark:text-gray-400">
@@ -704,13 +704,13 @@ export default function Reports({ user }: ReportsProps) {
                   : 'Weekly report: previous Monday–Saturday (no attachment).'}
               </p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap items-stretch sm:items-center shrink-0">
             {user.role === 'admin' && (
               <button
                 type="button"
                 onClick={sendReportsToManagers}
                 disabled={sendingReports}
-                className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                 title="Send report for selected date range (e.g. one month) to all managers"
               >
                 {sendingReports ? (
@@ -731,7 +731,7 @@ export default function Reports({ user }: ReportsProps) {
                 type="button"
                 onClick={sendWeeklyReportsNow}
                 disabled={sendingWeekly}
-                className="flex items-center space-x-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center justify-center space-x-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600 text-white rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                 title={user.role === 'admin' ? 'Send previous week (Mon–Sat) report to all managers and HR/Payroll' : 'Send your team’s weekly report to your email'}
               >
                 {sendingWeekly ? (
@@ -781,13 +781,13 @@ export default function Reports({ user }: ReportsProps) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Date Range */}
-          <div className="space-y-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-4 gap-4">
+          {/* Date Range - needs more horizontal space for two date inputs */}
+          <div className="space-y-2 min-w-0">
             <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
               <span>Date Range</span>
             </label>
-            <div className="flex items-center space-x-2 h-10">
+            <div className="flex items-center gap-2 h-10 min-w-0">
               <input
                 type="date"
                 value={format(dateRange.start, 'yyyy-MM-dd')}
@@ -798,7 +798,7 @@ export default function Reports({ user }: ReportsProps) {
                     setDateRange(prev => ({ ...prev, start: new Date() }))
                   }
                 }}
-                className="flex-1 px-3 py-2 h-full border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 min-w-[7rem] px-3 py-2 h-full border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <span className="text-gray-600 dark:text-gray-400 text-sm flex-shrink-0">to</span>
               <input
@@ -811,14 +811,14 @@ export default function Reports({ user }: ReportsProps) {
                     setDateRange(prev => ({ ...prev, end: new Date() }))
                   }
                 }}
-                className="flex-1 px-3 py-2 h-full border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 min-w-[7rem] px-3 py-2 h-full border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
           </div>
 
           {/* User Filter (for managers/admins) */}
           {(user.role === 'admin' || user.role === 'manager' || user.role === 'hr') && (
-            <div className="space-y-2">
+            <div className="space-y-2 min-w-0">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
                 <span>Users</span>
               </label>
@@ -914,7 +914,7 @@ export default function Reports({ user }: ReportsProps) {
 
           {/* Team Filter (only for admins) */}
           {user.role === 'admin' && teams.length > 0 && (
-            <div className="space-y-2">
+            <div className="space-y-2 min-w-0">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
                 <span>Team/Department</span>
               </label>
@@ -935,7 +935,7 @@ export default function Reports({ user }: ReportsProps) {
           
           {/* Show team info for non-admin users (read-only) */}
           {user.role !== 'admin' && user.team && (
-            <div className="space-y-2">
+            <div className="space-y-2 min-w-0">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
                 <span>Team/Department</span>
               </label>
@@ -947,7 +947,7 @@ export default function Reports({ user }: ReportsProps) {
 
           {/* Role Filter (for admins only) */}
           {user.role === 'admin' && (
-            <div className="space-y-2">
+            <div className="space-y-2 min-w-0">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
                 <span>Role</span>
               </label>
@@ -967,7 +967,7 @@ export default function Reports({ user }: ReportsProps) {
           )}
 
           {/* Project Filter */}
-          <div className="space-y-2">
+          <div className="space-y-2 min-w-0">
             <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center space-x-1">
               <span>Project</span>
             </label>
