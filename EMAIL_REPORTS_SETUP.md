@@ -131,51 +131,85 @@ These addresses receive the same report emails as managers (per-run for “Send 
 
 ## Automatic (scheduled) sending
 
-### Weekly report every Monday
+Set a **cron secret** in Supabase Edge Function secrets so scheduled jobs can invoke reports without a user JWT:
 
-To send the **weekly report** (previous week Mon–Sat) automatically every Monday:
+- **Name:** `CRON_SECRET`
+- **Value:** a long random string (e.g. from `openssl rand -base64 32`).
 
-1. **Set a cron secret** in Supabase Edge Function secrets:
-   - Name: `CRON_SECRET`
-   - Value: a long random string (e.g. from `openssl rand -base64 32`).
+### 1. Weekly report – every Monday (previous week Mon–Sat)
 
-2. **Enable pg_cron and pg_net** in your Supabase project (Database → Extensions).
+Managers (and HR/Payroll if configured) receive the **weekly** report for the previous Monday–Saturday automatically every Monday. The manual **“Send weekly report now”** button still works any day.
 
-3. **Schedule the weekly function** (e.g. every Monday at 9:00 AM UTC). In the SQL Editor, run (replace `YOUR_CRON_SECRET` and your project URL/anon key if using Vault):
+**Option A – Supabase pg_cron (recommended)**
+
+1. Enable **pg_cron** and **pg_net** in your project (Database → Extensions).
+2. In the SQL Editor, run (replace `YOUR_CRON_SECRET`, `YOUR_PROJECT_REF`, and `YOUR_ANON_KEY`; or use Vault for secrets):
 
 ```sql
--- Store secrets in Vault first (if not already):
+-- Optional: store secrets in Vault first
 -- select vault.create_secret('YOUR_CRON_SECRET', 'cron_secret');
 -- select vault.create_secret('https://YOUR_PROJECT_REF.supabase.co', 'project_url');
 -- select vault.create_secret('YOUR_ANON_KEY', 'anon_key');
 
+-- Every Monday at 09:00 UTC: send weekly reports (HTML, same as “Send weekly report now”)
 select cron.schedule(
   'send-weekly-reports-monday',
-  '0 9 * * 1',  -- Every Monday at 09:00 UTC
+  '0 9 * * 1',
   $$
   select net.http_post(
-    url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/send-weekly-reports',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'anon_key')
-    ),
-    body := jsonb_build_object('cronSecret', (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'))
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/send-manager-reports',
+    headers := jsonb_build_object('Content-Type', 'application/json'),
+    body := jsonb_build_object('cronSecret', (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'), 'weekly', true)
   ) as request_id;
   $$
 );
 ```
 
-Alternatively, use an external cron (e.g. [cron-job.org](https://cron-job.org)) that POSTs to `https://YOUR_PROJECT_REF.supabase.co/functions/v1/send-weekly-reports` with body `{"cronSecret": "YOUR_CRON_SECRET"}` and no auth (the secret in the body authorizes the run).
+To use the **Excel** weekly report (send-weekly-reports) instead of the HTML report, call `send-weekly-reports` with the same cron schedule and body `{"cronSecret": "YOUR_CRON_SECRET"}` (no `weekly` key). The function URL is `/functions/v1/send-weekly-reports`.
 
-### Manual “Send reports now” on a schedule
+**Option B – External cron**
 
-To run the **date-range report** (same as “Send reports now”) on a schedule, use an external cron that calls `send-manager-reports` with a valid **admin JWT** in the `Authorization: Bearer <token>` header and body:
+Use a cron service (e.g. [cron-job.org](https://cron-job.org)) to POST every Monday to:
 
-```json
-{ "startDate": "2026-02-10", "endDate": "2026-02-16" }
+- **URL:** `https://YOUR_PROJECT_REF.supabase.co/functions/v1/send-manager-reports`
+- **Body:** `{"cronSecret": "YOUR_CRON_SECRET", "weekly": true}`  
+- No `Authorization` header needed; the secret in the body authorizes the run.
+
+### 2. Monthly report – 1st of each month (previous calendar month)
+
+On the **1st of each month**, the **monthly** report (same as “Send reports now” for the previous full month) is sent automatically to all managers and HR/Payroll. The manual **“Send reports now”** button is unchanged (admin picks date range).
+
+**Option A – Supabase pg_cron**
+
+```sql
+-- 1st of every month at 09:00 UTC: send previous month’s report to all managers + HR/Payroll
+select cron.schedule(
+  'send-monthly-reports',
+  '0 9 1 * *',
+  $$
+  select net.http_post(
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/send-manager-reports',
+    headers := jsonb_build_object('Content-Type', 'application/json'),
+    body := jsonb_build_object('cronSecret', (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'), 'monthly', true)
+  ) as request_id;
+  $$
+);
 ```
 
-Store and rotate the admin token securely.
+**Option B – External cron**
+
+- **URL:** `https://YOUR_PROJECT_REF.supabase.co/functions/v1/send-manager-reports`
+- **Body:** `{"cronSecret": "YOUR_CRON_SECRET", "monthly": true}`
+- Schedule: 1st of every month (e.g. 09:00 UTC).
+
+### Summary
+
+| Schedule        | Purpose                         | Body / action                                                                 |
+|----------------|----------------------------------|-------------------------------------------------------------------------------|
+| Every Monday   | Weekly (previous Mon–Sat)       | `send-manager-reports` with `{ "cronSecret": "...", "weekly": true }`         |
+| 1st of month   | Monthly (previous month)         | `send-manager-reports` with `{ "cronSecret": "...", "monthly": true }`       |
+
+Manual buttons are unchanged: managers can still click **“Send weekly report now”** any day; admins can use **“Send reports now”** for a custom date range.
 
 ## Troubleshooting
 

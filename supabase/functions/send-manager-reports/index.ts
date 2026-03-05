@@ -1,9 +1,10 @@
 // Send attendance and tracker reports to each manager via Microsoft 365 (Graph API)
-// Invoke with body: { startDate?, endDate? } for date-range HTML report (admin only), or { weekly: true } for previous-week HTML report (manager or admin)
-// Requires: MICROSOFT_TENANT_ID, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_FROM_EMAIL
+// Invoke with body: { startDate?, endDate? } for date-range HTML report (admin only), or { weekly: true } for previous-week HTML report (manager or admin).
+// For cron/scheduled: body { cronSecret, weekly?: true } for weekly (e.g. every Monday), or { cronSecret, monthly: true } for monthly (e.g. 1st of month, previous month).
+// Requires: MICROSOFT_TENANT_ID, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_FROM_EMAIL; optional CRON_SECRET for scheduled runs.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
-import { format, parseISO, startOfDay, endOfDay, eachDayOfInterval, startOfWeek, subWeeks, addDays } from 'https://esm.sh/date-fns@3.0.6'
+import { format, parseISO, startOfDay, endOfDay, eachDayOfInterval, startOfWeek, subWeeks, addDays, subMonths, startOfMonth, endOfMonth } from 'https://esm.sh/date-fns@3.0.6'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -193,39 +194,63 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Missing authorization header' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    const { data: { user: authUser }, error: authError } = await supabase.auth.getUser(
-      authHeader.replace('Bearer ', '')
-    )
-    if (authError || !authUser) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid or expired token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    const body = (await req.json().catch(() => ({}))) as {
+      startDate?: string
+      endDate?: string
+      weekly?: boolean
+      monthly?: boolean
+      cronSecret?: string
     }
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role, full_name, email')
-      .eq('id', authUser.id)
-      .single()
-    const role = (profile as { role?: string; full_name?: string; email?: string } | null)?.role
-    if (role !== 'admin' && role !== 'manager') {
-      return new Response(
-        JSON.stringify({ error: 'Only admins and managers can send reports' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    let role: 'admin' | 'manager'
+    let authUser: { id: string } | null = null
+    let profile: { role?: string; full_name?: string; email?: string; id?: string } | null = null
+
+    const cronSecret = Deno.env.get('CRON_SECRET')
+    if (cronSecret && body.cronSecret === cronSecret) {
+      // Scheduled run: no JWT. Only weekly or monthly is allowed.
+      if (body.weekly !== true && body.monthly !== true) {
+        return new Response(
+          JSON.stringify({ error: 'Scheduled run requires body.weekly or body.monthly with cronSecret.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+      role = 'admin'
+    } else {
+      const authHeader = req.headers.get('Authorization')
+      if (!authHeader) {
+        return new Response(
+          JSON.stringify({ error: 'Missing authorization header' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+      const { data: { user: userData }, error: authError } = await supabase.auth.getUser(
+        authHeader.replace('Bearer ', '')
       )
+      if (authError || !userData) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid or expired token' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+      authUser = userData
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('role, full_name, email, id')
+        .eq('id', authUser.id)
+        .single()
+      profile = profileData as typeof profile
+      role = (profile?.role === 'admin' || profile?.role === 'manager') ? profile.role : (profile?.role as 'admin' | 'manager')
+      if (role !== 'admin' && role !== 'manager') {
+        return new Response(
+          JSON.stringify({ error: 'Only admins and managers can send reports' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
     }
 
     const tenantId = Deno.env.get('MICROSOFT_TENANT_ID')
@@ -242,10 +267,10 @@ Deno.serve(async (req) => {
       )
     }
 
-    const body = (await req.json().catch(() => ({}))) as { startDate?: string; endDate?: string; weekly?: boolean }
     const isWeekly = body.weekly === true
-    // Date-range report (e.g. one month): admin only. Weekly report: manager or admin.
-    if (!isWeekly && role !== 'admin') {
+    const isMonthlyCron = body.monthly === true
+    // Date-range report (e.g. one month): admin only. Weekly report: manager or admin. Monthly cron: no user.
+    if (!isWeekly && !isMonthlyCron && role !== 'admin') {
       return new Response(
         JSON.stringify({ error: 'Only admins can send date-range (e.g. monthly) reports. Use "Send weekly report now" for your team.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -260,6 +285,10 @@ Deno.serve(async (req) => {
       const prevWeekSaturday = addDays(prevWeekMonday, 5)
       start = startOfDay(prevWeekMonday)
       end = endOfDay(prevWeekSaturday)
+    } else if (isMonthlyCron) {
+      const prevMonth = subMonths(new Date(), 1)
+      start = startOfDay(startOfMonth(prevMonth))
+      end = endOfDay(endOfMonth(prevMonth))
     } else {
       end = body.endDate ? endOfDay(parseISO(body.endDate)) : endOfDay(new Date())
       start = body.startDate ? startOfDay(parseISO(body.startDate)) : startOfDay(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
@@ -282,9 +311,9 @@ Deno.serve(async (req) => {
       if (row.setting_key === 'report_payroll_emails') payrollEmails.push(...list)
     })
 
-    // If caller is a manager, send only to themselves. If admin, send to all managers.
+    // If caller is a manager, send only to themselves. If admin (or cron), send to all managers.
     let managers: Profile[]
-    if (role === 'manager') {
+    if (role === 'manager' && authUser) {
       const p = profile as { id?: string; full_name?: string; email?: string } | null
       if (!p?.email?.trim()) {
         return new Response(
