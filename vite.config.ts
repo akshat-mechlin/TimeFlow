@@ -14,7 +14,7 @@ export default defineConfig({
   base: process.env.VITE_BASE_PATH || './',
   server: {
     port: 5173,
-    allowedHosts:['timeflow.mechlintech.com'],
+    allowedHosts:['devtimeflow.mechlintech.com'],
   },
   build: {
     outDir: 'dist',
