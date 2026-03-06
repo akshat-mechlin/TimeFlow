@@ -14,7 +14,7 @@ services:
         BUILD_DATE: ${BUILD_DATE}
     container_name: timeflow-web
     ports:
-      - "5173:80"
+      - "5174:80"
     restart: unless-stopped
     labels:
       - "com.timeflow.git.commit=${GIT_COMMIT:-unknown}"
