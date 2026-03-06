@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban } from 'lucide-react'
+import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, ChevronLeft, ChevronRight } from 'lucide-react'
 import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
@@ -801,7 +801,18 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       )}
 
       {/* Modal for viewing screenshot with zoom */}
-      {selectedScreenshot && (
+      {selectedScreenshot && (() => {
+        const allInView = hourlyGroups.flatMap((g) => g.screenshots)
+        const currentIndex = allInView.findIndex((s) => s.id === selectedScreenshot.id)
+        const hasPrev = currentIndex > 0
+        const hasNext = currentIndex >= 0 && currentIndex < allInView.length - 1
+        const goPrev = () => {
+          if (hasPrev) setSelectedScreenshot(allInView[currentIndex - 1])
+        }
+        const goNext = () => {
+          if (hasNext) setSelectedScreenshot(allInView[currentIndex + 1])
+        }
+        return (
         <div
           className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4"
           onClick={(e) => {
@@ -842,7 +853,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                     className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                     title="Zoom Out"
                   >
-                    <ZoomOut className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                    <ZoomOut className="w-5 h-5 text-gray-600 dark:text-gray-400 " />
                   </button>
                   <span className="text-sm text-gray-600 dark:text-gray-400 min-w-[60px] text-center">
                     {Math.round(zoomLevel * 100)}%
@@ -857,7 +868,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                   {zoomLevel !== 1 && (
                     <button
                       onClick={resetZoom}
-                      className="px-3 py-1 text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                      className="px-3 py-1 text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors text-white"
                     >
                       Reset
                     </button>
@@ -868,7 +879,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                     setSelectedScreenshot(null)
                     resetZoom()
                   }}
-                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-2xl leading-none"
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-2xl leading-none text-white"
                 >
                   ×
                 </button>
@@ -890,6 +901,27 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                 maxHeight: 'calc(90vh - 200px)' 
               }}
             >
+              {/* Left / Right navigation arrows */}
+              {hasPrev && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); goPrev(); }}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-black/50 hover:bg-black/70 text-white transition-colors shadow-lg"
+                  aria-label="Previous screenshot"
+                >
+                  <ChevronLeft className="w-8 h-8" />
+                </button>
+              )}
+              {hasNext && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); goNext(); }}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-black/50 hover:bg-black/70 text-white transition-colors shadow-lg"
+                  aria-label="Next screenshot"
+                >
+                  <ChevronRight className="w-8 h-8" />
+                </button>
+              )}
               <div className="flex items-center justify-center w-full h-full min-h-[400px] p-4">
                 <img
                   ref={imageRef}
@@ -1036,7 +1068,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                     setSelectedScreenshot(null)
                     resetZoom()
                   }}
-                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:bg-gray-700/50 dark:hover:bg-gray-700 transition-colors"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:bg-gray-700/50 dark:hover:bg-gray-700 transition-colors text-white"
                 >
                   Close
                 </button>
@@ -1047,7 +1079,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

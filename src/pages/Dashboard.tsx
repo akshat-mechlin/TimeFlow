@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Clock, TrendingUp, Users, FolderKanban, BarChart3, RefreshCw } from 'lucide-react'
+import { Clock, TrendingUp, Users, FolderKanban, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { format, startOfDay, endOfDay } from 'date-fns'
 import { motion } from 'framer-motion'
 import Loader from '../components/Loader'
@@ -14,7 +14,11 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ user }: DashboardProps) {
+  const ENTRIES_PER_PAGE = 10
   const [recentEntries, setRecentEntries] = useState<(TimeEntry & { profile?: Profile })[]>([])
+  const [entriesPage, setEntriesPage] = useState(1)
+  const [entriesTotalCount, setEntriesTotalCount] = useState(0)
+  const [entriesLoading, setEntriesLoading] = useState(false)
   const [todayHours, setTodayHours] = useState(0)
   const [totalHours, setTotalHours] = useState(0)
   const [activeProjects, setActiveProjects] = useState(0)
@@ -26,13 +30,55 @@ export default function Dashboard({ user }: DashboardProps) {
     fetchDashboardData()
   }, [user.id])
 
+  const fetchRecentEntriesPage = async (page: number) => {
+    setEntriesLoading(true)
+    try {
+      const from = (page - 1) * ENTRIES_PER_PAGE
+      const to = from + ENTRIES_PER_PAGE - 1
+      const { data: entries, error } = await supabase
+        .from('time_entries')
+        .select(`
+          *,
+          profile:profiles!time_entries_user_id_fkey(*),
+          project_time_entries(
+            project_id,
+            billable,
+            projects(name)
+          )
+        `)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .range(from, to)
+      if (error) throw error
+      setRecentEntries(entries ?? [])
+    } catch (e) {
+      console.error('Error fetching entries page:', e)
+    } finally {
+      setEntriesLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (entriesPage > 1) fetchRecentEntriesPage(entriesPage)
+  }, [entriesPage])
+
   const fetchDashboardData = async () => {
     try {
       setLoading(true)
       const todayStart = startOfDay(new Date()).toISOString()
       const todayEnd = endOfDay(new Date()).toISOString()
 
-      // Fetch recent time entries - always show only current user's data
+      // Total count for pagination
+      const { count: entriesCount } = await supabase
+        .from('time_entries')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+      setEntriesTotalCount(entriesCount ?? 0)
+      setEntriesPage(1)
+
+      // Fetch first page of recent time entries
+      const from = 0
+      const to = ENTRIES_PER_PAGE - 1
       const { data: entries, error: entriesError } = await supabase
         .from('time_entries')
         .select(`
@@ -46,7 +92,7 @@ export default function Dashboard({ user }: DashboardProps) {
         `)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
-        .limit(10)
+        .range(from, to)
 
       if (entriesError) throw entriesError
 
@@ -242,55 +288,92 @@ export default function Dashboard({ user }: DashboardProps) {
               <p>No time entries found. Time entries are tracked by your external time tracking application.</p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {recentEntries.map((entry, index) => (
-                <motion.div
-                  key={entry.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.2, delay: 0.6 + index * 0.05 }}
-                  whileHover={{ x: 4 }}
-                  className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                >
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">
-                        <Clock className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            <>
+              {entriesLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader size="md" text="Loading entries..." />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {recentEntries.map((entry, index) => (
+                    <motion.div
+                      key={entry.id}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.2, delay: index * 0.03 }}
+                      whileHover={{ x: 4 }}
+                      className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">
+                            <Clock className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-800 dark:text-gray-200">
+                              {(() => {
+                                const entryWithProjects = entry as any
+                                if (entryWithProjects.project_time_entries && entryWithProjects.project_time_entries.length > 0) {
+                                  const projectNames = entryWithProjects.project_time_entries
+                                    .map((pte: any) => pte.projects?.name)
+                                    .filter(Boolean)
+                                  if (projectNames.length > 0) {
+                                    return projectNames.length === 1 
+                                      ? projectNames[0]
+                                      : `${projectNames[0]} +${projectNames.length - 1} more`
+                                  }
+                                }
+                                return 'No Project'
+                              })()}
+                            </p>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                              {format(new Date(entry.start_time), 'MMM d, yyyy • h:mm a')}
+                              {entry.end_time &&
+                                ` - ${format(new Date(entry.end_time), 'h:mm a')}`}
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium text-gray-800 dark:text-gray-200">
-                          {(() => {
-                            const entryWithProjects = entry as any
-                            if (entryWithProjects.project_time_entries && entryWithProjects.project_time_entries.length > 0) {
-                              const projectNames = entryWithProjects.project_time_entries
-                                .map((pte: any) => pte.projects?.name)
-                                .filter(Boolean)
-                              if (projectNames.length > 0) {
-                                return projectNames.length === 1 
-                                  ? projectNames[0]
-                                  : `${projectNames[0]} +${projectNames.length - 1} more`
-                              }
-                            }
-                            return 'No Project'
-                          })()}
+                      <div className="text-right">
+                        <p className="font-semibold text-gray-800 dark:text-white">
+                          {formatDuration(entry.duration)}
                         </p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {format(new Date(entry.start_time), 'MMM d, yyyy • h:mm a')}
-                          {entry.end_time &&
-                            ` - ${format(new Date(entry.end_time), 'h:mm a')}`}
-                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Duration</p>
                       </div>
-                    </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+              {entriesTotalCount > ENTRIES_PER_PAGE && (
+                <div className="mt-6 flex items-center justify-between border-t border-gray-200 dark:border-gray-700 pt-4">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Showing {(entriesPage - 1) * ENTRIES_PER_PAGE + 1}–
+                    {Math.min(entriesPage * ENTRIES_PER_PAGE, entriesTotalCount)} of {entriesTotalCount} entries
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEntriesPage((p) => Math.max(1, p - 1))}
+                      disabled={entriesPage <= 1 || entriesLoading}
+                      className="flex items-center gap-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <ChevronLeft className="w-4 h-4" /> Previous
+                    </button>
+                    <span className="text-sm text-gray-600 dark:text-gray-300 px-2">
+                      Page {entriesPage} of {Math.ceil(entriesTotalCount / ENTRIES_PER_PAGE) || 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setEntriesPage((p) => Math.min(Math.ceil(entriesTotalCount / ENTRIES_PER_PAGE), p + 1))}
+                      disabled={entriesPage >= Math.ceil(entriesTotalCount / ENTRIES_PER_PAGE) || entriesLoading}
+                      className="flex items-center gap-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Next <ChevronRight className="w-4 h-4" />
+                    </button>
                   </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-gray-800 dark:text-white">
-                      {formatDuration(entry.duration)}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Duration</p>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       </motion.div>
