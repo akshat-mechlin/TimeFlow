@@ -1,0 +1,16 @@
+{
+  "name": "delete-sc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "cleanup.js",
+  "type": "module",
+  "scripts": {
+    "start": "node cleanup.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.98.0"
+  }
+}
