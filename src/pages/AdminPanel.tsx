@@ -18,7 +18,7 @@ import {
 import { Line, Bar, Pie } from 'react-chartjs-2'
 import { format, startOfMonth, endOfMonth, subDays, eachDayOfInterval } from 'date-fns'
 import type { Tables } from '../types/database'
-import { updateRequiredTrackerVersion, getTrackerVersionStats, type TrackerVersionInfo } from '../lib/trackerVersion'
+import { updateRequiredTrackerVersion, getTrackerVersionStats, getAllowedVersionsList, type TrackerVersionInfo } from '../lib/trackerVersion'
 
 ChartJS.register(
   CategoryScale,
@@ -599,12 +599,21 @@ export default function AdminPanel({ user }: AdminPanelProps) {
   const handleUpdateTrackerVersion = async () => {
     try {
       setTrackerVersionLoading(true)
-      
-      // Validate version format
-      const versionRegex = /^\d+\.\d+\.\d+$/
-      if (!versionRegex.test(trackerVersion.requiredVersion)) {
-        showError('Invalid version format. Use semantic versioning (e.g., 1.0.0)')
+
+      // Validate: allow comma-separated versions; each part is semantic with optional prerelease (e.g., 1.6.1 or 1.6.1-beta)
+      const versionPartRegex = /^\d+\.\d+\.\d+([-\.][a-zA-Z0-9.-]+)?$/
+      const parts = trackerVersion.requiredVersion.split(',').map((v) => v.trim()).filter(Boolean)
+
+      if (parts.length === 0) {
+        showError('At least one version is required.')
         return
+      }
+
+      for (const part of parts) {
+        if (!versionPartRegex.test(part)) {
+          showError(`Invalid version format: "${part}". Use semantic versioning (e.g., 1.6.0 or 1.6.1-beta). Multiple versions can be comma-separated.`)
+          return
+        }
       }
 
       const result = await updateRequiredTrackerVersion(
@@ -1291,11 +1300,10 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                             value={trackerVersion.requiredVersion}
                             onChange={(e) => setTrackerVersion({ ...trackerVersion, requiredVersion: e.target.value })}
                             className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                            placeholder="1.6.0"
-                            pattern="^\d+\.\d+\.\d+$"
+                            placeholder="1.6.1 or 1.6.1,1.6.1-beta"
                           />
                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                             Semantic versioning format: MAJOR.MINOR.PATCH (e.g., 1.6.0)
+                             One or more allowed versions, comma-separated (e.g., 1.6.1 or 1.6.1,1.6.1-beta). Semantic format: MAJOR.MINOR.PATCH with optional suffix.
                            </p>
                         </div>
 
@@ -1352,18 +1360,22 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                               <div className="space-y-1">
                                 {Object.entries(trackerVersionStats.versionDistribution)
                                   .sort((a, b) => b[1] - a[1])
-                                  .map(([version, count]) => (
+                                  .map(([version, count]) => {
+                                    const allowedList = getAllowedVersionsList(trackerVersion.requiredVersion)
+                                    const isAllowed = allowedList.some((v) => v === version.replace(/^v/i, '').trim())
+                                    return (
                                     <div key={version} className="flex items-center justify-between text-xs">
                                       <span className="text-gray-700 dark:text-gray-300">{version}</span>
                                       <span className={`font-medium ${
-                                        version === trackerVersion.requiredVersion
+                                        isAllowed
                                           ? 'text-green-600 dark:text-green-400'
                                           : 'text-yellow-600 dark:text-yellow-400'
                                       }`}>
                                         {count} user{count !== 1 ? 's' : ''}
                                       </span>
                                     </div>
-                                  ))}
+                                    )
+                                  })}
                               </div>
                             </div>
                           )}

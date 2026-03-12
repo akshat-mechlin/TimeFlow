@@ -18,7 +18,7 @@ This system provides centralized version control for the Electron tracker app. A
 
 The following settings are stored in the `system_settings` table:
 
-- **`tracker_required_version`** (string): Required version in semantic versioning format (e.g., "1.0.0")
+- **`tracker_required_version`** (string): One or more allowed versions, comma-separated (e.g., "1.6.1" or "1.6.1,1.6.1-beta"). The desktop app is allowed if its version appears in this list; otherwise an update is required.
 - **`tracker_update_url`** (string, optional): URL where users can download the latest version
 - **`tracker_force_update`** (boolean): If true, all outdated versions are blocked immediately
 
@@ -76,9 +76,10 @@ interface TrackerVersionInfo {
 
 ### Configuration
 
-1. **Required Tracker Version**: Enter the version in semantic versioning format (MAJOR.MINOR.PATCH)
-   - Example: `1.4.0`
-   - This version must match exactly with the tracker app version
+1. **Required Tracker Version**: Enter one or more allowed versions, comma-separated
+   - Example: `1.6.0` (single version) or `1.6.1,1.6.1-beta` (multiple allowed versions)
+   - The tracker app is allowed if its version exactly matches one of the listed versions
+   - Prerelease suffixes are supported (e.g., `1.6.1-beta`)
 
 2. **Update Download URL**: (Optional) Provide a URL where users can download the latest version
    - Example: `https://example.com/download/tracker-latest.exe`
@@ -101,16 +102,12 @@ interface TrackerVersionInfo {
 
 ## Version Comparison Logic
 
-Currently, versions must match **exactly** (MAJOR.MINOR.PATCH). For example:
-- Required: `1.4.0`
-- Current: `1.4.0` → ✅ Compatible
-- Current: `1.4.1` → ❌ Not compatible
-- Current: `1.3.0` → ❌ Not compatible
+The required version value can contain **multiple allowed versions** separated by commas (e.g., `1.6.1,1.6.1-beta`). The system splits this value and checks whether the desktop app’s version is in the list (after normalizing, e.g. stripping a leading `v`). If it is, the app is allowed; if not, an update is required.
 
-Future enhancements could support:
-- `>=` comparison (allow newer versions)
-- Major version enforcement only
-- Version ranges
+- Allowed value example: `1.6.1,1.6.1-beta`
+- Current: `1.6.1` → ✅ Compatible
+- Current: `1.6.1-beta` → ✅ Compatible
+- Current: `1.6.0` → ❌ Not compatible (update required)
 
 ## Logging
 
