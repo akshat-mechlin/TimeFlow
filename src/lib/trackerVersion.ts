@@ -17,37 +17,44 @@ export interface TrackerVersionInfo {
 }
 
 /**
- * Compares two semantic versions
- * Returns: -1 if v1 < v2, 0 if v1 === v2, 1 if v1 > v2
+ * Parses the required version string into a list of allowed versions.
+ * The database value can contain multiple versions separated by commas (e.g., "1.6.1,1.6.1-beta").
  */
-function compareVersions(v1: string, v2: string): number {
-  const parts1 = v1.split('.').map(Number)
-  const parts2 = v2.split('.').map(Number)
-
-  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-    const part1 = parts1[i] || 0
-    const part2 = parts2[i] || 0
-
-    if (part1 < part2) return -1
-    if (part1 > part2) return 1
+function getAllowedVersions(requiredVersion: string): string[] {
+  if (!requiredVersion || typeof requiredVersion !== 'string') {
+    return []
   }
-
-  return 0
+  return requiredVersion
+    .split(',')
+    .map((v) => v.replace(/^v/i, '').trim())
+    .filter(Boolean)
 }
 
 /**
- * Checks if the current tracker version is compatible with the required version
- * Versions must match exactly (MAJOR.MINOR.PATCH)
+ * Returns the list of allowed versions from the required version string (comma-separated).
+ * Useful for UI to highlight which versions are allowed.
+ */
+export function getAllowedVersionsList(requiredVersion: string): string[] {
+  return getAllowedVersions(requiredVersion)
+}
+
+/**
+ * Checks if the current tracker version is compatible with the required version(s).
+ * The requiredVersion can be a single version or multiple versions separated by commas (e.g., "1.6.1,1.6.1-beta").
+ * If the current version exists in the allowed list (after normalizing), the app is allowed.
  */
 export function isVersionCompatible(currentVersion: string, requiredVersion: string): boolean {
   try {
-    // Normalize versions (remove any leading 'v' prefix)
     const normalizedCurrent = currentVersion.replace(/^v/i, '').trim()
-    const normalizedRequired = requiredVersion.replace(/^v/i, '').trim()
+    const allowedVersions = getAllowedVersions(requiredVersion)
 
-    // For now, we require exact match
-    // In the future, we could support >= comparison for backward compatibility
-    return normalizedCurrent === normalizedRequired
+    if (allowedVersions.length === 0) {
+      return false
+    }
+
+    return allowedVersions.some(
+      (allowed) => allowed.replace(/^v/i, '').trim() === normalizedCurrent
+    )
   } catch (error) {
     console.error('Error comparing versions:', error)
     return false
@@ -215,7 +222,8 @@ async function logVersionCheck(
 
 /**
  * Updates the required tracker version (admin only)
- * This should be called from the admin panel
+ * This should be called from the admin panel.
+ * The version parameter can be a single version or multiple versions separated by commas (e.g., "1.6.1,1.6.1-beta").
  */
 export async function updateRequiredTrackerVersion(
   version: string,
@@ -223,16 +231,27 @@ export async function updateRequiredTrackerVersion(
   forceUpdate: boolean = false
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Validate version format (basic semantic versioning)
-    const versionRegex = /^\d+\.\d+\.\d+$/
-    if (!versionRegex.test(version)) {
+    // Validate: allow comma-separated list; each part is semantic version with optional prerelease (e.g., 1.6.1 or 1.6.1-beta)
+    const versionPartRegex = /^\d+\.\d+\.\d+([-\.][a-zA-Z0-9.-]+)?$/
+    const parts = version.split(',').map((v) => v.trim()).filter(Boolean)
+
+    if (parts.length === 0) {
       return {
         success: false,
-        error: 'Invalid version format. Use semantic versioning (e.g., 1.0.0)',
+        error: 'At least one version is required.',
       }
     }
 
-    // Update required version
+    for (const part of parts) {
+      if (!versionPartRegex.test(part)) {
+        return {
+          success: false,
+          error: `Invalid version format: "${part}". Use semantic versioning (e.g., 1.6.0 or 1.6.1-beta). Multiple versions can be comma-separated.`,
+        }
+      }
+    }
+
+    // Store the value as-is (comma-separated string)
     const { error: versionError } = await supabase
       .from('system_settings')
       .upsert(
