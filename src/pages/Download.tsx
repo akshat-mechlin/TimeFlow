@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useToast } from '../contexts/ToastContext'
 import Loader from '../components/Loader'
 import packageJson from '../../package.json'
-import { getRequiredTrackerVersion } from '../lib/trackerVersion'
+import { getRequiredTrackerVersion, getAllowedVersionsList } from '../lib/trackerVersion'
 
 // Windows Icon Component
 const WindowsIcon = ({ className }: { className?: string }) => (
@@ -49,6 +49,8 @@ export default function Download() {
       const versionSettings = await getRequiredTrackerVersion()
       if (versionSettings && versionSettings.requiredVersion) {
         setVersion(versionSettings.requiredVersion)
+        const allowedVersions = getAllowedVersionsList(versionSettings.requiredVersion)
+        console.log('[Download App] Allowed desktop versions that can be run:', allowedVersions)
       }
     } catch (error) {
       console.error('Error fetching tracker version:', error)
