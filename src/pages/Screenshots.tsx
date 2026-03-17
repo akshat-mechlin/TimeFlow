@@ -6,6 +6,15 @@ import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
 
+/** Base URL for screenshot/camera file server. Change for production (e.g. env VITE_SCREENSHOT_SERVER_URL). */
+const SCREENSHOT_SERVER_BASE_URL = 'http://localhost:3500'
+
+/** Build URL for a screenshot/camera file from the local file server: /file?date=YYYY-MM-DD&path=... */
+function buildScreenshotFileUrl(path: string, date: string): string {
+  const dateParam = date || format(new Date(), 'yyyy-MM-dd')
+  return `${SCREENSHOT_SERVER_BASE_URL}/file?date=${dateParam}&path=${encodeURIComponent(path)}`
+}
+
 type Profile = Tables<'profiles'>
 type Screenshot = Tables<'screenshots'>
 type TimeEntry = Tables<'time_entries'>
@@ -162,46 +171,27 @@ export default function Screenshots({ user }: ScreenshotsProps) {
     }
   }
 
-  const getImageUrl = (storagePath: string, screenshotId: string, screenshotType?: string): string => {
-    // Check if we already have the URL cached
-    if (imageUrls[screenshotId]) {
-      return imageUrls[screenshotId]
-    }
+  /** Build image URL from local screenshot server (date + path). Uses selectedDate for date when not passed. */
+  const getImageUrl = (
+    storagePath: string,
+    screenshotId: string,
+    screenshotType?: string,
+    dateForFile?: string
+  ): string => {
+    if (imageUrls[screenshotId]) return imageUrls[screenshotId]
 
-    // Get Supabase URL
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL || 'https://yxkniwzsinqyjdqqzyjs.supabase.co'
-    
-    // All images are stored in the "screenshots" bucket
-    // Camera shots are in the "camera/" folder, regular screenshots are in the root
-    const bucketName = 'screenshots'
-    
-    // Determine the correct path
-    // If it's a camera shot and path doesn't start with "camera/", prepend it
     const isCamera = screenshotType === 'camera' || screenshotType === 'webcam'
     let finalPath = storagePath
     if (isCamera && !storagePath.startsWith('camera/')) {
       finalPath = `camera/${storagePath}`
     } else if (!isCamera && storagePath.startsWith('camera/')) {
-      // If it's not a camera shot but path has camera prefix, remove it (shouldn't happen, but handle it)
       finalPath = storagePath.replace(/^camera\//, '')
     }
-    
-    // Try to get public URL using Supabase storage client
-    try {
-      const { data } = supabase.storage.from(bucketName).getPublicUrl(finalPath)
-      if (data?.publicUrl) {
-        const url = data.publicUrl
-        setImageUrls(prev => ({ ...prev, [screenshotId]: url }))
-        return url
-      }
-    } catch (e) {
-      // Continue to fallback
-    }
 
-    // Fallback: construct URL manually
-    const fallbackUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${finalPath}`
-    setImageUrls(prev => ({ ...prev, [screenshotId]: fallbackUrl }))
-    return fallbackUrl
+    const date = dateForFile || selectedDate
+    const url = buildScreenshotFileUrl(finalPath, date)
+    setImageUrls(prev => ({ ...prev, [screenshotId]: url }))
+    return url
   }
 
   const fetchScreenshots = async () => {
@@ -275,41 +265,14 @@ export default function Screenshots({ user }: ScreenshotsProps) {
 
       if (error) throw error
       
-      // Pre-fetch image URLs for all screenshots
-      // Try to get signed URLs if public URLs don't work
-      const screenshotsWithUrls = await Promise.all(
-        (data || []).map(async (screenshot) => {
-          // Determine correct path: camera shots go in camera/ folder
-          const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
-          let finalPath = screenshot.storage_path
-          if (isCamera && !finalPath.startsWith('camera/')) {
-            finalPath = `camera/${finalPath}`
-          } else if (!isCamera && finalPath.startsWith('camera/')) {
-            // Remove camera prefix if it's not a camera shot
-            finalPath = finalPath.replace(/^camera\//, '')
-          }
-          
-          let url = getImageUrl(finalPath, screenshot.id, screenshot.type)
-          
-          // Try to get a signed URL if the bucket is private
-          // All images are in the "screenshots" bucket
-          try {
-            const bucketName = 'screenshots'
-            const { data: signedData, error: signedError } = await supabase.storage
-              .from(bucketName)
-              .createSignedUrl(finalPath, 3600) // 1 hour expiry
-            
-            if (signedData?.signedUrl && !signedError) {
-              url = signedData.signedUrl
-              setImageUrls(prev => ({ ...prev, [screenshot.id]: url }))
-            }
-          } catch (e) {
-            // Use the public URL we already have
-          }
-
-          return { ...screenshot, imageUrl: url }
-        })
-      )
+      // Pre-fetch image URLs from local screenshot server (date + path)
+      const screenshotsWithUrls = (data || []).map((screenshot) => {
+        const dateForFile = screenshot.taken_at
+          ? format(new Date(screenshot.taken_at), 'yyyy-MM-dd')
+          : selectedDate
+        const url = getImageUrl(screenshot.storage_path, screenshot.id, screenshot.type, dateForFile)
+        return { ...screenshot, imageUrl: url }
+      })
       
       setScreenshots(screenshotsWithUrls as any)
     } catch (error) {
@@ -609,7 +572,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                     } else if (!isCamera && finalPath.startsWith('camera/')) {
                       finalPath = finalPath.replace(/^camera\//, '')
                     }
-                    const imageUrl = screenshot.imageUrl || imageUrls[screenshot.id] || getImageUrl(finalPath, screenshot.id, screenshot.type)
+                    const dateForFile = screenshot.taken_at ? format(new Date(screenshot.taken_at), 'yyyy-MM-dd') : selectedDate
+                    const imageUrl = screenshot.imageUrl || imageUrls[screenshot.id] || getImageUrl(finalPath, screenshot.id, screenshot.type, dateForFile)
                     
                     return (
                       <div
@@ -623,35 +587,20 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                             alt={isCamera ? 'Camera shot' : 'Screenshot'}
                             className="w-full h-full object-cover"
                             loading="lazy"
-                            onError={async (e) => {
+                            onError={(e) => {
                               console.error('Failed to load image:', imageUrl, 'Path:', screenshot.storage_path)
-                              
-                              // Try to get a signed URL as fallback
-                              // All images are in the "screenshots" bucket
-                              // Camera shots are in camera/ folder
-                              try {
-                                const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
-                                let finalPath = screenshot.storage_path
-                                if (isCamera && !finalPath.startsWith('camera/')) {
-                                  finalPath = `camera/${finalPath}`
-                                } else if (!isCamera && finalPath.startsWith('camera/')) {
-                                  finalPath = finalPath.replace(/^camera\//, '')
-                                }
-                                
-                                const { data: signedData, error: signedError } = await supabase.storage
-                                  .from('screenshots')
-                                  .createSignedUrl(finalPath, 3600)
-                                
-                                if (signedData?.signedUrl && !signedError) {
-                                  e.currentTarget.src = signedData.signedUrl
-                                  setImageUrls(prev => ({ ...prev, [screenshot.id]: signedData.signedUrl }))
-                                  return
-                                }
-                              } catch (err) {
-                                console.error('Failed to get signed URL:', err)
+                              // Try fallback with selectedDate as date (in case taken_at date differs from folder)
+                              const fallbackDate = selectedDate
+                              const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
+                              let finalPath = screenshot.storage_path
+                              if (isCamera && !finalPath.startsWith('camera/')) finalPath = `camera/${finalPath}`
+                              else if (!isCamera && finalPath.startsWith('camera/')) finalPath = finalPath.replace(/^camera\//, '')
+                              const fallbackUrl = buildScreenshotFileUrl(finalPath, fallbackDate)
+                              if (fallbackUrl !== imageUrl) {
+                                e.currentTarget.src = fallbackUrl
+                                setImageUrls(prev => ({ ...prev, [screenshot.id]: fallbackUrl }))
+                                return
                               }
-                              
-                              // If still failed, hide image and show fallback
                               e.currentTarget.style.display = 'none'
                               const fallback = e.currentTarget.parentElement?.querySelector('.image-fallback') as HTMLElement
                               if (fallback) fallback.classList.remove('hidden')
@@ -933,7 +882,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                     } else if (!isCamera && finalPath.startsWith('camera/')) {
                       finalPath = finalPath.replace(/^camera\//, '')
                     }
-                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    const dateForFile = selectedScreenshot.taken_at ? format(new Date(selectedScreenshot.taken_at), 'yyyy-MM-dd') : selectedDate
+                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type, dateForFile)
                   })()}
                   alt={(selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam') ? 'Camera shot' : 'Screenshot'}
                   className="transition-transform duration-200 ease-out select-none"
@@ -1055,7 +1005,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                     } else if (!isCamera && finalPath.startsWith('camera/')) {
                       finalPath = finalPath.replace(/^camera\//, '')
                     }
-                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    const dateForFile = selectedScreenshot.taken_at ? format(new Date(selectedScreenshot.taken_at), 'yyyy-MM-dd') : selectedDate
+                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type, dateForFile)
                   })()}
                   download
                   className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
