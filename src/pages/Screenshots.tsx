@@ -7,7 +7,7 @@ import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
 
 /** Base URL for screenshot/camera file server. Change for production (e.g. env VITE_SCREENSHOT_SERVER_URL). */
-const SCREENSHOT_SERVER_BASE_URL = 'http://localhost:3500'
+const SCREENSHOT_SERVER_BASE_URL = 'https://timeflowstorage.mechlintech.com/'
 
 /** Build URL for a screenshot/camera file from the local file server: /file?date=YYYY-MM-DD&path=... */
 function buildScreenshotFileUrl(path: string, date: string): string {
