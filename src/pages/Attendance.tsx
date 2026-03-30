@@ -1058,207 +1058,168 @@ export default function Attendance({ user }: AttendanceProps) {
       : `${format(parseISO(startDate), 'MMMM d, yyyy')} - ${format(parseISO(endDate), 'MMMM d, yyyy')}`
     doc.text(`Period: ${dateRangeStr}`, doc.internal.pageSize.getWidth() - 15, 25, { align: 'right' })
     
-    // Prepare table data
-    const tableData: any[] = []
-    const tableHeaders: string[] = ['Employee Name']
+    /** One horizontal table per calendar week (Mon–Sun): at most 7 days + week total — fits A4 landscape without clipping. */
+    const chunkRanges: { start: number; end: number }[] = []
+    let weekChunkStart = 0
+    for (let i = 1; i <= allDates.length; i++) {
+      const atEnd = i === allDates.length
+      const weekChanged =
+        !atEnd && getWeekKey(allDates[i]) !== getWeekKey(allDates[i - 1])
+      if (atEnd || weekChanged) {
+        chunkRanges.push({ start: weekChunkStart, end: i })
+        weekChunkStart = i
+      }
+    }
     
-    // Build headers with dates
-    allDates.forEach((date, index) => {
-      const dateObj = parseISO(date)
-      const dayName = format(dateObj, 'EEEE')
-      const dateStr = format(dateObj, 'd MMMM yyyy')
-      const header = `${dateStr} (${dayName})`
+    const employees = Array.from(employeeMap.values()).sort((a, b) => a.name.localeCompare(b.name))
+    const startY = 40
+    let tableStartY = startY
+    const columnStyles: Record<number, Record<string, unknown>> = {
+      0: { cellWidth: 32, fontStyle: 'bold', fontSize: 7 },
+    }
+    
+    const buildChunk = (globalStart: number, globalEnd: number) => {
+      const tableHeaders: string[] = ['Employee Name']
+      const weekTotalColumnIndices = new Set<number>()
+      const durationColumnIndices = new Map<number, number>()
+      let colIndex = 1
       
-      tableHeaders.push(`${header} - Status`, `${header} - Duration`)
-      
-      // Add weekly total column after Sunday (end of week) or at the end
-      const dayOfWeek = format(dateObj, 'EEEE')
-      if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
-        // Find Monday and Sunday of this week
-        const weekKey = getWeekKey(date)
-        const weekDates = datesByWeek.get(weekKey) || []
-        if (weekDates.length > 0) {
-          const weekStart = weekDates[0] // Monday
-          const weekEnd = weekDates[weekDates.length - 1] // Sunday (or last day of week)
-          const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
-          const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
-          tableHeaders.push(`Week Total\n(${weekStartFormatted} - ${weekEndFormatted})`)
+      for (let g = globalStart; g < globalEnd; g++) {
+        const date = allDates[g]
+        const dateObj = parseISO(date)
+        const dayShort = format(dateObj, 'EEE')
+        const dateShort = format(dateObj, 'd MMM')
+        tableHeaders.push(`${dateShort}\n${dayShort}\nStatus`, `${dateShort}\n${dayShort}\nHours`)
+        
+        durationColumnIndices.set(colIndex + 1, g)
+        colIndex += 2
+        
+        const dayOfWeek = format(dateObj, 'EEEE')
+        if (dayOfWeek === 'Sunday' || g === allDates.length - 1) {
+          const weekKey = getWeekKey(date)
+          const weekDates = datesByWeek.get(weekKey) || []
+          if (weekDates.length > 0) {
+            const weekStart = weekDates[0]
+            const weekEnd = weekDates[weekDates.length - 1]
+            const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
+            const weekEndFormatted = format(parseISO(weekEnd), 'MMM d')
+            tableHeaders.push(`week total\n${weekStartFormatted}–${weekEndFormatted}`)
+          }
+          weekTotalColumnIndices.add(colIndex)
+          colIndex += 1
         }
       }
-    })
-    
-    // Build table rows
-    const employees = Array.from(employeeMap.values()).sort((a, b) => a.name.localeCompare(b.name))
-    
-    employees.forEach((employee) => {
-      const row: any[] = [employee.name]
-      const weekTotals = new Map<string, number>() // Track totals by week key
       
-      allDates.forEach((date, index) => {
-        const record = employee.records.get(date)
-        const dateObj = parseISO(date)
-        const dayOfWeek = format(dateObj, 'EEEE')
-        const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
-        const weekKey = getWeekKey(date)
-        
-        if (record) {
-          const hoursWorked = (record.duration || 0) / 3600
-          let status = record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' ')
+      const tableData: string[][] = []
+      employees.forEach((employee) => {
+        const row: string[] = [employee.name]
+        for (let g = globalStart; g < globalEnd; g++) {
+          const date = allDates[g]
+          const dateObj = parseISO(date)
+          const dayOfWeek = format(dateObj, 'EEEE')
+          const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
+          const weekKey = getWeekKey(date)
+          const record = employee.records.get(date)
           
-          if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
-            status = 'Weekend'
-          }
-          
-          row.push(status)
-          
-          const durationStr = hoursWorked > 0 ? `${hoursWorked.toFixed(2)}h` : '—'
-          row.push(durationStr)
-          
-          // Add to week total
-          if (hoursWorked > 0) {
-            if (!weekTotals.has(weekKey)) {
-              weekTotals.set(weekKey, 0)
+          if (record) {
+            const hoursWorked = (record.duration || 0) / 3600
+            let status = record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' ')
+            if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
+              status = 'Weekend'
             }
-            weekTotals.set(weekKey, weekTotals.get(weekKey)! + hoursWorked)
-          }
-        } else {
-          if (isWeekend) {
-            row.push('Weekend', '—')
+            row.push(status)
+            row.push(hoursWorked > 0 ? `${hoursWorked.toFixed(2)}h` : '—')
           } else {
-            row.push('—', '—')
+            if (isWeekend) {
+              row.push('Weekend', '—')
+            } else {
+              row.push('—', '—')
+            }
+          }
+          
+          if (dayOfWeek === 'Sunday' || g === allDates.length - 1) {
+            const weekDatesList = datesByWeek.get(weekKey) || []
+            let weekHours = 0
+            for (const d of weekDatesList) {
+              const r = employee.records.get(d)
+              if (r && (r.duration || 0) > 0) {
+                weekHours += (r.duration || 0) / 3600
+              }
+            }
+            row.push(weekHours > 0 ? `${weekHours.toFixed(2)}h` : '—')
           }
         }
-        
-        // Add weekly total column after Sunday (end of week) or at the end
-        if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
-          const weekTotal = weekTotals.get(weekKey) || 0
-          row.push(weekTotal > 0 ? `${weekTotal.toFixed(2)}h` : '—')
-        }
+        tableData.push(row)
       })
       
-      tableData.push(row)
-    })
+      return { tableHeaders, tableData, weekTotalColumnIndices, durationColumnIndices }
+    }
     
-    // Add table with autoTable
-    let startY = 40
-    const pageWidth = doc.internal.pageSize.getWidth()
-    const availableWidth = pageWidth - 20 // 10mm margin on each side
-    
-    // Calculate column widths dynamically
-    const numDateColumns = allDates.length * 2 // Status + Duration for each date
-    
-    // Employee name gets fixed width, rest is distributed
-    const employeeNameWidth = 30
-    const remainingWidth = availableWidth - employeeNameWidth
-    
-    // Calculate how many week total columns we have (count Sundays and last day)
-    let weekTotalCount = 0
-    for (let i = 0; i < allDates.length; i++) {
-      const dateObj = parseISO(allDates[i])
-      const dayOfWeek = format(dateObj, 'EEEE')
-      if (dayOfWeek === 'Sunday' || i === allDates.length - 1) {
-        weekTotalCount++
+    chunkRanges.forEach((range, chunkIndex) => {
+      if (chunkIndex > 0) {
+        const last = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable
+        tableStartY = (last?.finalY ?? tableStartY) + 10
       }
-    }
-    
-    // Distribute width: 85% for date columns, 15% for week totals
-    const dateColumnsTotal = numDateColumns
-    const weekTotalColumnsTotal = weekTotalCount
-    const dateColumnWidth = (remainingWidth * 0.85) / dateColumnsTotal
-    const weekTotalWidth = weekTotalColumnsTotal > 0 ? (remainingWidth * 0.15) / weekTotalColumnsTotal : 20
-    
-    // Build column styles
-    const columnStyles: any = {
-      0: { cellWidth: employeeNameWidth, fontStyle: 'bold', fontSize: 6 },
-    }
-    
-    // Track which columns are week totals and which are duration columns
-    // Must match the exact header structure
-    const weekTotalColumnIndices = new Set<number>()
-    const durationColumnIndices = new Map<number, number>() // Map column index to date index
-    let colIndex = 1
-    
-    for (let dateIndex = 0; dateIndex < allDates.length; dateIndex++) {
-      const date = allDates[dateIndex]
-      const dateObj = parseISO(date)
-      const dayOfWeek = format(dateObj, 'EEEE')
+      const dFirst = format(parseISO(allDates[range.start]), 'MMM d, yyyy')
+      const dLast = format(parseISO(allDates[range.end - 1]), 'MMM d, yyyy')
+      doc.setFontSize(9)
+      doc.setTextColor(60, 60, 60)
+      doc.setFont('helvetica', 'bold')
+      doc.text(`Week: ${dFirst} – ${dLast}`, 14, tableStartY - 2)
+      tableStartY += 5
       
-      // Status column
-      columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
-      colIndex++
+      const { tableHeaders, tableData, weekTotalColumnIndices, durationColumnIndices } = buildChunk(
+        range.start,
+        range.end,
+      )
       
-      // Duration column - track this as a duration column
-      durationColumnIndices.set(colIndex, dateIndex)
-      columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
-      colIndex++
-      
-      // Add week total column after Sunday (end of week) or at the end
-      if (dayOfWeek === 'Sunday' || dateIndex === allDates.length - 1) {
-        weekTotalColumnIndices.add(colIndex)
-        columnStyles[colIndex] = { cellWidth: weekTotalWidth, fontSize: 6, fontStyle: 'bold' }
-        colIndex++
-      }
-    }
-    
-    autoTable(doc, {
-      head: [tableHeaders],
-      body: tableData,
-      startY: startY,
-      theme: 'striped',
-      headStyles: {
-        fillColor: [headerColor[0], headerColor[1], headerColor[2]],
-        textColor: 255,
-        fontStyle: 'bold',
-        fontSize: 6,
-        halign: 'center',
-        valign: 'middle',
-        cellPadding: 1,
-      },
-      bodyStyles: {
-        fontSize: 6,
-        textColor: [44, 62, 80],
-        cellPadding: 1,
-      },
-      alternateRowStyles: {
-        fillColor: [lightGray[0], lightGray[1], lightGray[2]],
-      },
-      columnStyles: columnStyles,
-      didParseCell: (data: any) => {
-        const colIndex = data.column.index
-        const cellValue = data.cell.text[0]
-        
-        // First check if this is a week total column - only these should be red
-        if (weekTotalColumnIndices.has(colIndex)) {
-          if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
-            const hours = parseFloat(cellValue.replace('h', ''))
-            if (!isNaN(hours) && hours < 40) {
-              // Highlight week totals < 40 hours in red
-              data.cell.styles.fillColor = [220, 53, 69] // Red color
-              data.cell.styles.textColor = [255, 255, 255]
-              data.cell.styles.fontStyle = 'bold'
+      autoTable(doc, {
+        head: [tableHeaders],
+        body: tableData,
+        startY: tableStartY,
+        theme: 'striped',
+        headStyles: {
+          fillColor: [headerColor[0], headerColor[1], headerColor[2]],
+          textColor: 255,
+          fontStyle: 'bold',
+          fontSize: 7,
+          halign: 'center',
+          valign: 'middle',
+          cellPadding: 1.5,
+        },
+        bodyStyles: {
+          fontSize: 7,
+          textColor: [44, 62, 80],
+          cellPadding: 1,
+        },
+        alternateRowStyles: {
+          fillColor: [lightGray[0], lightGray[1], lightGray[2]],
+        },
+        columnStyles: columnStyles,
+        didParseCell: (data: any) => {
+          const colIndex = data.column.index
+          const cellValue = data.cell.text[0]
+          
+          if (weekTotalColumnIndices.has(colIndex)) {
+            if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
+              const hours = parseFloat(cellValue.replace('h', ''))
+              if (!isNaN(hours) && hours < 40) {
+                data.cell.styles.fillColor = [220, 53, 69]
+                data.cell.styles.textColor = [255, 255, 255]
+                data.cell.styles.fontStyle = 'bold'
+              }
             }
+            return
           }
-          // Return early - don't process week total columns as duration columns
-          return
-        }
-        
-        // Check if this is a duration cell using our tracked duration column indices
-        if (durationColumnIndices.has(colIndex)) {
-          if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
-            const hours = parseFloat(cellValue.replace('h', ''))
-            
-            // Only process if hours < 7.30 (entries >= 7.5 should not be marked)
-            if (!isNaN(hours) && hours < 7.30) {
-              // Get the date index from our map
-              const dateIndex = durationColumnIndices.get(colIndex)!
-              if (dateIndex >= 0 && dateIndex < allDates.length) {
+          
+          if (durationColumnIndices.has(colIndex)) {
+            if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
+              const hours = parseFloat(cellValue.replace('h', ''))
+              if (!isNaN(hours) && hours < 7.30) {
+                const dateIndex = durationColumnIndices.get(colIndex)!
                 const date = allDates[dateIndex]
-                const dateObj = parseISO(date)
-                const dayOfWeek = format(dateObj, 'EEEE')
+                const dayOfWeek = format(parseISO(date), 'EEEE')
                 const isWeekday = dayOfWeek !== 'Saturday' && dayOfWeek !== 'Sunday'
-                
-                // Only highlight weekdays (Monday-Friday) with < 7.30 hours in orange
-                // Entries >= 7.5 hours will not be marked (condition already checked above)
                 if (isWeekday) {
                   data.cell.styles.fillColor = [orangeColor[0], orangeColor[1], orangeColor[2]]
                   data.cell.styles.textColor = [255, 255, 255]
@@ -1266,19 +1227,18 @@ export default function Attendance({ user }: AttendanceProps) {
                 }
               }
             }
-            // If hours >= 7.5, do nothing - no highlighting
           }
-        }
-      },
-      margin: { top: startY, left: 10, right: 10, bottom: 15 },
-      styles: {
-        overflow: 'linebreak',
-        cellWidth: 'auto',
-        lineWidth: 0.1,
-      },
-      tableWidth: 'wrap',
-      showHead: 'everyPage',
-      showFoot: 'never',
+        },
+        margin: { top: startY, left: 10, right: 10, bottom: 15 },
+        styles: {
+          overflow: 'linebreak',
+          cellWidth: 'wrap',
+          lineWidth: 0.1,
+          minCellWidth: 8,
+        },
+        showHead: 'everyPage',
+        showFoot: 'never',
+      })
     })
     
     // Add footer on each page
