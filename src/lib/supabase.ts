@@ -2,10 +2,9 @@ import { createClient } from '@supabase/supabase-js'
 import type { Database } from '../types/database'
 
 // Support both VITE_ and NEXT_PUBLIC_ prefixes for compatibility
-const supabaseUrl = 
-  'https://ljhnrsejkjtbsabumonk.supabase.co'
+export const supabaseUrl = 'https://ljhnrsejkjtbsabumonk.supabase.co'
 
-const supabaseAnonKey = 
+export const supabaseAnonKey =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqaG5yc2Vqa2p0YnNhYnVtb25rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NDA5NTksImV4cCI6MjA4NTExNjk1OX0.CJ2xmJMJFr0-Pg5irL3d70QRkRpTcfiJ61wSalabaJ8'
 
 export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
