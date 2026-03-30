@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, supabaseUrl, supabaseAnonKey } from '../lib/supabase'
 import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle, Mailbox } from 'lucide-react'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
@@ -236,38 +236,41 @@ export default function AdminPanel({ user }: AdminPanelProps) {
     e.preventDefault()
 
     try {
-      // Create user in Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: newUserForm.email,
-        password: newUserForm.password,
-        email_confirm: true, // Auto-confirm email
-      })
-
-      if (authError) throw authError
-
-      if (!authData.user) {
-        throw new Error('Failed to create user account')
+      // Refresh session with Auth server (getSession alone can return a stale token after idle/OAuth).
+      const { data: authUserData, error: authUserErr } = await supabase.auth.getUser()
+      if (authUserErr || !authUserData.user) {
+        throw new Error('Your session expired. Please sign in again.')
+      }
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('Your session expired. Please sign in again.')
       }
 
-      // Create profile in profiles table
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
+      const res = await fetch(`${supabaseUrl}/functions/v1/admin-create-user`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+          apikey: supabaseAnonKey,
+        },
+        body: JSON.stringify({
           email: newUserForm.email,
+          password: newUserForm.password,
           full_name: newUserForm.full_name,
           role: newUserForm.role,
           team: newUserForm.team || null,
           manager_id: newUserForm.manager_id || null,
-          force_password_change: true, // Force password change on first login
-          enable_screenshot_capture: true, // Default: enabled
-          enable_camera_capture: true, // Default: enabled
-        })
+        }),
+      })
 
-      if (profileError) {
-        // If profile creation fails, try to delete the auth user
-        await supabase.auth.admin.deleteUser(authData.user.id)
-        throw profileError
+      const data = (await res.json().catch(() => ({}))) as { userId?: string; error?: string }
+
+      if (!res.ok) {
+        throw new Error(data.error || `Request failed (${res.status})`)
+      }
+
+      if (data.error) {
+        throw new Error(data.error)
       }
 
       showSuccess('User created successfully!')
