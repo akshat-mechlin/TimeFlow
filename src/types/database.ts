@@ -243,6 +243,312 @@ export type Database = {
           },
         ]
       }
+      hub_audit_events: {
+        Row: {
+          action: string
+          actor_id: string | null
+          created_at: string | null
+          entity_id: string | null
+          entity_type: string
+          id: string
+          metadata: Json | null
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          created_at?: string | null
+          entity_id?: string | null
+          entity_type: string
+          id?: string
+          metadata?: Json | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          created_at?: string | null
+          entity_id?: string | null
+          entity_type?: string
+          id?: string
+          metadata?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hub_audit_events_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      hub_department_members: {
+        Row: {
+          created_at: string | null
+          department_id: string
+          id: string
+          role: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          department_id: string
+          id?: string
+          role?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          department_id?: string
+          id?: string
+          role?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hub_department_members_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "hub_departments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hub_department_members_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      hub_departments: {
+        Row: {
+          code: string
+          created_at: string | null
+          id: string
+          name: string
+        }
+        Insert: {
+          code: string
+          created_at?: string | null
+          id?: string
+          name: string
+        }
+        Update: {
+          code?: string
+          created_at?: string | null
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      hub_integration_connections: {
+        Row: {
+          config: Json
+          created_at: string | null
+          department_id: string | null
+          display_name: string | null
+          id: string
+          provider: string
+          status: string
+          updated_at: string | null
+        }
+        Insert: {
+          config?: Json
+          created_at?: string | null
+          department_id?: string | null
+          display_name?: string | null
+          id?: string
+          provider: string
+          status?: string
+          updated_at?: string | null
+        }
+        Update: {
+          config?: Json
+          created_at?: string | null
+          department_id?: string | null
+          display_name?: string | null
+          id?: string
+          provider?: string
+          status?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hub_integration_connections_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "hub_departments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      hub_team_update_comments: {
+        Row: {
+          body: string
+          created_at: string | null
+          id: string
+          update_id: string
+          user_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string | null
+          id?: string
+          update_id: string
+          user_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string | null
+          id?: string
+          update_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hub_team_update_comments_update_id_fkey"
+            columns: ["update_id"]
+            isOneToOne: false
+            referencedRelation: "hub_team_updates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hub_team_update_comments_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      hub_team_updates: {
+        Row: {
+          body: string
+          created_at: string | null
+          department_id: string
+          external_source: string | null
+          external_thread_id: string | null
+          id: string
+          project_id: string | null
+          status: Database["public"]["Enums"]["hub_update_status"]
+          tags: string[]
+          template_id: string | null
+          title: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string | null
+          department_id: string
+          external_source?: string | null
+          external_thread_id?: string | null
+          id?: string
+          project_id?: string | null
+          status?: Database["public"]["Enums"]["hub_update_status"]
+          tags?: string[]
+          template_id?: string | null
+          title?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string | null
+          department_id?: string
+          external_source?: string | null
+          external_thread_id?: string | null
+          id?: string
+          project_id?: string | null
+          status?: Database["public"]["Enums"]["hub_update_status"]
+          tags?: string[]
+          template_id?: string | null
+          title?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hub_team_updates_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "hub_departments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hub_team_updates_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hub_team_updates_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "hub_update_templates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hub_team_updates_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      hub_update_templates: {
+        Row: {
+          body: string
+          created_at: string | null
+          created_by: string | null
+          department_id: string | null
+          id: string
+          is_system: boolean
+          name: string
+          template_type: Database["public"]["Enums"]["hub_template_type"]
+          updated_at: string | null
+        }
+        Insert: {
+          body: string
+          created_at?: string | null
+          created_by?: string | null
+          department_id?: string | null
+          id?: string
+          is_system?: boolean
+          name: string
+          template_type?: Database["public"]["Enums"]["hub_template_type"]
+          updated_at?: string | null
+        }
+        Update: {
+          body?: string
+          created_at?: string | null
+          created_by?: string | null
+          department_id?: string | null
+          id?: string
+          is_system?: boolean
+          name?: string
+          template_type?: Database["public"]["Enums"]["hub_template_type"]
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hub_update_templates_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "hub_update_templates_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "hub_departments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leave_approvers: {
         Row: {
           approver_id: string
@@ -889,7 +1195,11 @@ export type Database = {
           manager_type: string
         }[]
       }
+      get_tracker_required_version: { Args: never; Returns: string }
       get_user_id_by_email: { Args: { user_email: string }; Returns: string }
+      hub_ensure_department_membership: { Args: never; Returns: undefined }
+      hub_is_admin: { Args: { uid: string }; Returns: boolean }
+      hub_user_department_ids: { Args: { uid: string }; Returns: string[] }
       is_admin: { Args: { user_id: string }; Returns: boolean }
       is_manager: { Args: { user_id: string }; Returns: boolean }
       is_manager_of_employee: {
@@ -902,6 +1212,8 @@ export type Database = {
       }
     }
     Enums: {
+      hub_template_type: "daily" | "weekly" | "sprint" | "custom"
+      hub_update_status: "draft" | "published" | "archived"
       leave_status: "pending" | "approved" | "rejected"
       notification_type:
         | "leave_request"
@@ -1037,6 +1349,8 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      hub_template_type: ["daily", "weekly", "sprint", "custom"],
+      hub_update_status: ["draft", "published", "archived"],
       leave_status: ["pending", "approved", "rejected"],
       notification_type: [
         "leave_request",

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
 import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
 import Loader from '../components/Loader'
+import { useToast } from '../contexts/ToastContext'
 import type { Tables } from '../types/database'
 
 type Profile = Tables<'profiles'>
@@ -43,6 +44,7 @@ interface HourlyGroup {
 }
 
 export default function Screenshots({ user }: ScreenshotsProps) {
+  const { showSuccess, showError } = useToast()
   const [screenshots, setScreenshots] = useState<ScreenshotWithDetails[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -63,6 +65,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
   const [userDropdownPosition, setUserDropdownPosition] = useState({ top: 0, left: 0 })
+  const [deletingScreenshotId, setDeletingScreenshotId] = useState<string | null>(null)
 
   useEffect(() => {
     fetchTeamMembers()
@@ -316,6 +319,58 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       console.error('Error fetching screenshots:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const resolveStoragePath = (storagePath: string, screenshotType?: string) => {
+    const isCamera = screenshotType === 'camera' || screenshotType === 'webcam'
+    if (isCamera && !storagePath.startsWith('camera/')) return `camera/${storagePath}`
+    if (!isCamera && storagePath.startsWith('camera/')) return storagePath.replace(/^camera\//, '')
+    return storagePath
+  }
+
+  const deleteScreenshot = async (shot: ScreenshotWithDetails) => {
+    if (user.role !== 'admin') {
+      showError('Only admins can delete screenshots')
+      return
+    }
+    if (deletingScreenshotId) return
+    const ok = window.confirm('Delete this screenshot? This cannot be undone.')
+    if (!ok) return
+
+    setDeletingScreenshotId(shot.id)
+    try {
+      // Delete dependent rows first to avoid FK violations
+      const { error: e1 } = await supabase.from('activity_logs').delete().eq('screenshot_id', shot.id)
+      if (e1) throw e1
+
+      const { error: e2 } = await supabase.from('screenshot_activity').delete().eq('screenshot_id', shot.id)
+      if (e2) throw e2
+
+      const { error: e3 } = await supabase.from('screenshots').delete().eq('id', shot.id)
+      if (e3) throw e3
+
+      // Best-effort storage cleanup
+      try {
+        const finalPath = resolveStoragePath(shot.storage_path, shot.type)
+        await supabase.storage.from('screenshots').remove([finalPath])
+      } catch {
+        // ignore storage errors (db row already deleted)
+      }
+
+      setScreenshots((prev) => prev.filter((s) => s.id !== shot.id))
+      setImageUrls((prev) => {
+        const next = { ...prev }
+        delete next[shot.id]
+        return next
+      })
+      if (selectedScreenshot?.id === shot.id) setSelectedScreenshot(null)
+      showSuccess('Screenshot deleted')
+    } catch (err) {
+      console.error('Delete screenshot error:', err)
+      showError(err instanceof Error ? err.message : 'Failed to delete screenshot')
+    } finally {
+      setDeletingScreenshotId(null)
     }
   }
 
@@ -657,7 +712,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                               if (fallback) fallback.classList.remove('hidden')
                             }}
                           />
-                          <div className="hidden image-fallback absolute inset-0 flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-700">
+                          <div className="hidden image-fallback absolute inset-0 flex-col items-center justify-center bg-gray-100 dark:bg-gray-700">
                             {isCamera ? (
                               <>
                                 <Video className="w-12 h-12 text-gray-400 dark:text-gray-300 mb-2" />
@@ -953,7 +1008,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                   }}
                 />
               </div>
-              <div className="hidden absolute inset-0 flex flex-col items-center justify-center bg-gray-900 text-white z-10">
+              <div className="hidden absolute inset-0 flex-col items-center justify-center bg-gray-900 text-white z-10">
                 {(selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam') ? (
                   <>
                     <Video className="w-24 h-24 mx-auto mb-4 text-gray-400 dark:text-gray-300" />
@@ -1063,6 +1118,18 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                   <Download className="w-4 h-4" />
                   <span>Download</span>
                 </a>
+                {user.role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => void deleteScreenshot(selectedScreenshot)}
+                    disabled={deletingScreenshotId === selectedScreenshot.id}
+                    className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                    title="Delete screenshot"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>{deletingScreenshotId === selectedScreenshot.id ? 'Deleting…' : 'Delete'}</span>
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setSelectedScreenshot(null)
