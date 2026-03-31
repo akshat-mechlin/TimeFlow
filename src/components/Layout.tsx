@@ -17,6 +17,7 @@ import {
   Image,
   Sun,
   Moon,
+  MessageSquare,
 } from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext'
 import type { Tables } from '../types/database'
@@ -46,6 +47,7 @@ export default function Layout({ children, user }: LayoutProps) {
     { icon: BarChart3, label: 'Reports', path: '/reports' },
     { icon: FolderKanban, label: 'Projects', path: '/projects' },
     { icon: Users, label: 'Team Members', path: '/team' },
+    { icon: MessageSquare, label: 'Communication Hub', path: '/communication' },
     { icon: Image, label: 'Screenshots', path: '/screenshots' },
     ...(user.role === 'admin'
       ? [{ icon: Settings, label: 'Admin Panel', path: '/admin' }]

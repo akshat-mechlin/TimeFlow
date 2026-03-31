@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle } from 'lucide-react'
+import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle, MessageSquare } from 'lucide-react'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
 import {
@@ -19,6 +19,7 @@ import { Line, Bar, Pie } from 'react-chartjs-2'
 import { format, startOfMonth, endOfMonth, subDays, eachDayOfInterval } from 'date-fns'
 import type { Tables } from '../types/database'
 import { updateRequiredTrackerVersion, getTrackerVersionStats, getAllowedVersionsList, type TrackerVersionInfo } from '../lib/trackerVersion'
+import CommunicationHubAdminSection from '../components/CommunicationHubAdminSection'
 
 ChartJS.register(
   CategoryScale,
@@ -836,6 +837,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
   const tabs = [
     { id: 'users', label: 'User Management', icon: Users },
+    { id: 'communication', label: 'Communication Hub', icon: MessageSquare },
     { id: 'settings', label: 'System Settings', icon: Settings },
     { id: 'permissions', label: 'Permissions', icon: Shield },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
@@ -847,7 +849,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
       {/* Tabs */}
       <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 backdrop-blur-sm">
-        <div className="flex items-center space-x-1 border-b border-gray-200 dark:border-gray-700 p-2">
+        <div className="flex flex-wrap items-center gap-1 border-b border-gray-200 dark:border-gray-700 p-2">
           {tabs.map((tab) => {
             const Icon = tab.icon
             return (
@@ -1437,6 +1439,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
               )}
             </div>
           )}
+
+          {activeTab === 'communication' && <CommunicationHubAdminSection />}
 
           {activeTab === 'permissions' && (
             <div className="space-y-4">

@@ -17,6 +17,7 @@ const Screenshots = lazy(() => import('./pages/Screenshots'))
 const AdminPanel = lazy(() => import('./pages/AdminPanel'))
 const Profile = lazy(() => import('./pages/Profile'))
 const Download = lazy(() => import('./pages/Download'))
+const TeamUpdatesHub = lazy(() => import('./pages/TeamUpdatesHub'))
 const Login = lazy(() => import('./pages/Login'))
 const LoginDirect = lazy(() => import('./pages/LoginDirect'))
 
@@ -456,6 +457,7 @@ function App() {
                         <Route path="/reports" element={<Reports user={user} />} />
                         <Route path="/projects" element={<ProjectManagement user={user} />} />
                         <Route path="/team" element={<TeamMembers user={user} />} />
+                        <Route path="/communication" element={<TeamUpdatesHub user={user} />} />
                         <Route path="/screenshots" element={<Screenshots user={user} />} />
                         <Route 
                           path="/admin" 
