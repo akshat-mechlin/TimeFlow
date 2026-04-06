@@ -81,6 +81,18 @@ export default function Attendance({ user }: AttendanceProps) {
   const IST_TIMEZONE = 'Asia/Kolkata'
   const TRACKER_RESET_HOUR = 0 // 12 AM (midnight) IST
 
+  /** Build UTC instant from attendance calendar date (YYYY-MM-DD) + HH:mm interpreted in IST */
+  const startWallTimeToUtc = (dateYmd: string, hhmm: string) => {
+    const m = hhmm.match(/^(\d{1,2}):(\d{2})$/)
+    if (!m) return null
+    const h = Number(m[1])
+    const min = Number(m[2])
+    if (h < 0 || h > 23 || min < 0 || min > 59) return null
+    const hh = String(h).padStart(2, '0')
+    const mm = String(min).padStart(2, '0')
+    return fromZonedTime(`${dateYmd} ${hh}:${mm}:00`, IST_TIMEZONE)
+  }
+
   // Today and date ranges in IST so attendance is consistent regardless of machine timezone
   const getTodayIST = () => format(toZonedTime(new Date(), IST_TIMEZONE), 'yyyy-MM-dd')
   const getWeekAgoIST = () => format(subDays(toZonedTime(new Date(), IST_TIMEZONE), 7), 'yyyy-MM-dd')
@@ -665,10 +677,11 @@ export default function Attendance({ user }: AttendanceProps) {
     // Default to current user if not admin/HR/manager/accountant
     const canSelectUser = ['admin', 'hr', 'manager', 'accountant'].includes(user.role)
     const defaultUserId = canSelectUser ? '' : user.id
+    const today = getTodayIST()
     setTimeEntryForm({
       user_id: defaultUserId,
-      date: getTodayIST(),
-      start_time: '',
+      date: today,
+      start_time: `${today}T09:00`,
       duration: '',
       description: '',
     })
@@ -686,26 +699,27 @@ export default function Attendance({ user }: AttendanceProps) {
     const firstEntry = record.timeEntries && record.timeEntries.length > 0 ? record.timeEntries[0] : null
     
     if (firstEntry) {
-      const startTime = new Date(firstEntry.start_time)
-      // Convert duration from seconds to hours (with 2 decimal places)
+      // Always anchor start to the attendance row date; only the clock time (IST) is editable
+      const istWall = toZonedTime(new Date(firstEntry.start_time), IST_TIMEZONE)
+      const timeHm = format(istWall, 'HH:mm')
       const durationHours = firstEntry.duration ? (firstEntry.duration / 3600).toFixed(2) : ''
-      
+
       setTimeEntryForm({
         user_id: record.user_id,
         date: record.date,
-        start_time: format(startTime, "yyyy-MM-dd'T'HH:mm"),
+        start_time: `${record.date}T${timeHm}`,
         duration: durationHours,
         description: firstEntry.description || '',
       })
     } else if (record.clock_in_time) {
-      const clockIn = new Date(record.clock_in_time)
-      // Convert duration from seconds to hours (with 2 decimal places)
+      const istWall = toZonedTime(new Date(record.clock_in_time), IST_TIMEZONE)
+      const timeHm = format(istWall, 'HH:mm')
       const durationHours = record.duration ? (record.duration / 3600).toFixed(2) : ''
-      
+
       setTimeEntryForm({
         user_id: record.user_id,
         date: record.date,
-        start_time: format(clockIn, "yyyy-MM-dd'T'HH:mm"),
+        start_time: `${record.date}T${timeHm}`,
         duration: durationHours,
         description: '',
       })
@@ -713,7 +727,7 @@ export default function Attendance({ user }: AttendanceProps) {
       setTimeEntryForm({
         user_id: record.user_id,
         date: record.date,
-        start_time: '',
+        start_time: `${record.date}T09:00`,
         duration: '',
         description: '',
       })
@@ -742,7 +756,14 @@ export default function Attendance({ user }: AttendanceProps) {
       // Close confirmation modal
       setShowConfirmationModal(false)
 
-      const startTime = new Date(timeEntryForm.start_time)
+      const timeHm = timeEntryForm.start_time.includes('T')
+        ? timeEntryForm.start_time.split('T')[1]?.slice(0, 5) ?? ''
+        : ''
+      const startTime = startWallTimeToUtc(timeEntryForm.date, timeHm)
+      if (!startTime) {
+        alert('Please enter a valid start time')
+        return
+      }
       
       // Convert duration from hours to seconds
       const hours = parseFloat(timeEntryForm.duration)
@@ -2019,26 +2040,51 @@ export default function Attendance({ user }: AttendanceProps) {
                   type="date"
                   id="date"
                   value={timeEntryForm.date}
-                  onChange={(e) => setTimeEntryForm({ ...timeEntryForm, date: e.target.value })}
+                  onChange={(e) => {
+                    const newDate = e.target.value
+                    const prev = timeEntryForm.start_time
+                    const timeHm =
+                      prev.includes('T') && prev.split('T')[1]?.length >= 5
+                        ? prev.split('T')[1]!.slice(0, 5)
+                        : '09:00'
+                    setTimeEntryForm({
+                      ...timeEntryForm,
+                      date: newDate,
+                      start_time: `${newDate}T${timeHm}`,
+                    })
+                  }}
                   max={getTodayIST()}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                   required
                 />
               </div>
 
-              {/* Start Time */}
+              {/* Start Time (time only — date always matches Date field / row being edited) */}
               <div>
                 <label htmlFor="start_time" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Start Time *
                 </label>
                 <input
-                  type="datetime-local"
+                  type="time"
                   id="start_time"
-                  value={timeEntryForm.start_time}
-                  onChange={(e) => setTimeEntryForm({ ...timeEntryForm, start_time: e.target.value })}
+                  step={60}
+                  value={
+                    timeEntryForm.start_time.includes('T')
+                      ? timeEntryForm.start_time.split('T')[1]!.slice(0, 5)
+                      : '09:00'
+                  }
+                  onChange={(e) =>
+                    setTimeEntryForm({
+                      ...timeEntryForm,
+                      start_time: `${timeEntryForm.date}T${e.target.value}`,
+                    })
+                  }
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                   required
                 />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Time is in IST. The date above is used for this start time.
+                </p>
               </div>
 
               {/* Duration */}
@@ -2148,7 +2194,18 @@ export default function Attendance({ user }: AttendanceProps) {
                 </p>
                 <ul className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
                   <li>• Date: {timeEntryForm.date ? format(parseISO(timeEntryForm.date), 'MMM d, yyyy') : '—'}</li>
-                  <li>• Start Time: {timeEntryForm.start_time ? format(new Date(timeEntryForm.start_time), 'MMM d, yyyy hh:mm a') : '—'}</li>
+                  <li>
+                    • Start Time:{' '}
+                    {timeEntryForm.date && timeEntryForm.start_time.includes('T')
+                      ? (() => {
+                          const hm = timeEntryForm.start_time.split('T')[1]?.slice(0, 5)
+                          const utc = hm ? startWallTimeToUtc(timeEntryForm.date, hm) : null
+                          return utc
+                            ? format(toZonedTime(utc, IST_TIMEZONE), 'MMM d, yyyy hh:mm a')
+                            : '—'
+                        })()
+                      : '—'}
+                  </li>
                   <li>• Duration: {timeEntryForm.duration ? `${timeEntryForm.duration} hours` : '—'}</li>
                 </ul>
               </div>
