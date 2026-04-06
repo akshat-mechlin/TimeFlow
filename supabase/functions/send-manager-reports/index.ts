@@ -1,6 +1,8 @@
 // Send attendance and tracker reports to each manager via Microsoft 365 (Graph API)
 // Invoke with body: { startDate?, endDate? } for date-range HTML report (admin only), or { weekly: true } for previous-week HTML report (manager or admin).
-// For cron/scheduled: body { cronSecret, weekly?: true } for weekly (e.g. every Monday), or { cronSecret, monthly: true } for monthly (e.g. 1st of month, previous month).
+// For cron/scheduled: body { cronSecret, weekly?: true } for weekly; { cronSecret, monthly: true } for previous month (e.g. 1st); { cronSecret, monthlyAuto: true } for automation (1st → previous month, 25th → current month to date).
+// Cron secret may also be sent as header X-Cron-Secret (same value as CRON_SECRET). Values are trimmed when comparing (avoids copy/paste whitespace from the Dashboard).
+// Report mode for cron may be sent as header X-Cron-Report: weekly | monthly | monthlyAuto (if JSON body is empty or not parsed, e.g. some clients strip bodies).
 // Requires: MICROSOFT_TENANT_ID, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_FROM_EMAIL; optional CRON_SECRET for scheduled runs.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
@@ -8,7 +10,7 @@ import { format, parseISO, startOfDay, endOfDay, eachDayOfInterval, startOfWeek,
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-cron-secret, x-cron-report',
 }
 
 interface Profile {
@@ -198,28 +200,70 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    const body = (await req.json().catch(() => ({}))) as {
+    const rawBody = await req.text()
+    let body: {
       startDate?: string
       endDate?: string
       weekly?: boolean
       monthly?: boolean
+      monthlyAuto?: boolean
       cronSecret?: string
+    } = {}
+    if (rawBody.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(rawBody)
+        body = typeof parsed === 'object' && parsed !== null ? (parsed as typeof body) : {}
+      } catch {
+        return new Response(
+          JSON.stringify({
+            error:
+              'Invalid JSON body. Send JSON or omit the body and use headers X-Cron-Secret + X-Cron-Report (weekly | monthly | monthlyAuto) for cron.',
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
     }
+
+    const cronReportMode = (req.headers.get('x-cron-report') ?? '').trim().toLowerCase()
 
     let role: 'admin' | 'manager'
     let authUser: { id: string } | null = null
     let profile: { role?: string; full_name?: string; email?: string; id?: string } | null = null
 
-    const cronSecret = Deno.env.get('CRON_SECRET')
-    if (cronSecret && body.cronSecret === cronSecret) {
-      // Scheduled run: no JWT. Only weekly or monthly is allowed.
-      if (body.weekly !== true && body.monthly !== true) {
+    const cronSecretEnv = (Deno.env.get('CRON_SECRET') ?? '').trim()
+    const cronFromBody = typeof body.cronSecret === 'string' ? body.cronSecret.trim() : ''
+    const cronFromHeader = (req.headers.get('x-cron-secret') ?? '').trim()
+    const providedCronSecret = cronFromBody || cronFromHeader
+
+    let wantsWeekly = body.weekly === true
+    let wantsMonthly = body.monthly === true
+    let wantsMonthlyAuto = body.monthlyAuto === true
+
+    if (cronSecretEnv && providedCronSecret === cronSecretEnv) {
+      // Header-based mode only for verified cron (avoid JWT clients spoofing X-Cron-Report).
+      if (cronReportMode === 'weekly') wantsWeekly = true
+      if (cronReportMode === 'monthly') wantsMonthly = true
+      if (cronReportMode === 'monthlyauto' || cronReportMode === 'monthly_auto') wantsMonthlyAuto = true
+      // Scheduled run: no JWT. Only weekly, monthly, or monthlyAuto is allowed.
+      if (!wantsWeekly && !wantsMonthly && !wantsMonthlyAuto) {
         return new Response(
-          JSON.stringify({ error: 'Scheduled run requires body.weekly or body.monthly with cronSecret.' }),
+          JSON.stringify({
+            error:
+              'Scheduled run requires weekly, monthly, or monthlyAuto: set in JSON body or header X-Cron-Report (weekly | monthly | monthlyAuto).',
+          }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
       role = 'admin'
+    } else if (providedCronSecret) {
+      // Caller intended cron auth but secret mismatch or CRON_SECRET missing on the function
+      const msg = cronSecretEnv
+        ? 'Invalid cronSecret (check it matches Edge Function secret CRON_SECRET exactly).'
+        : 'CRON_SECRET is not set for this Edge Function. Add it under Project Settings → Edge Functions → Secrets, then redeploy send-manager-reports.'
+      return new Response(JSON.stringify({ error: msg }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
     } else {
       const authHeader = req.headers.get('Authorization')
       if (!authHeader) {
@@ -267,10 +311,11 @@ Deno.serve(async (req) => {
       )
     }
 
-    const isWeekly = body.weekly === true
-    const isMonthlyCron = body.monthly === true
-    // Date-range report (e.g. one month): admin only. Weekly report: manager or admin. Monthly cron: no user.
-    if (!isWeekly && !isMonthlyCron && role !== 'admin') {
+    const isWeekly = wantsWeekly
+    const isMonthlyCron = wantsMonthly
+    const isMonthlyAuto = wantsMonthlyAuto
+    // Date-range report (e.g. one month): admin only. Weekly report: manager or admin. Monthly cron / monthlyAuto: no user (scheduled).
+    if (!isWeekly && !isMonthlyCron && !isMonthlyAuto && role !== 'admin') {
       return new Response(
         JSON.stringify({ error: 'Only admins can send date-range (e.g. monthly) reports. Use "Send weekly report now" for your team.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -285,6 +330,24 @@ Deno.serve(async (req) => {
       const prevWeekSaturday = addDays(prevWeekMonday, 5)
       start = startOfDay(prevWeekMonday)
       end = endOfDay(prevWeekSaturday)
+    } else if (isMonthlyAuto) {
+      // Automation: run on 1st (previous month) and 25th (current month to date). Use UTC for consistent cron behavior.
+      const now = new Date()
+      const dayUtc = now.getUTCDate()
+      if (dayUtc === 1) {
+        const prevMonth = subMonths(now, 1)
+        start = startOfDay(startOfMonth(prevMonth))
+        end = endOfDay(endOfMonth(prevMonth))
+      } else if (dayUtc === 25 || dayUtc === 18) {
+        // 25th = production; 18th = optional test day (same: current month to date)
+        start = startOfDay(startOfMonth(now))
+        end = endOfDay(now)
+      } else {
+        return new Response(
+          JSON.stringify({ error: 'monthlyAuto is intended to be run only on the 1st (previous month), 18th (test), or 25th (current month to date) of the month (UTC).' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
     } else if (isMonthlyCron) {
       const prevMonth = subMonths(new Date(), 1)
       start = startOfDay(startOfMonth(prevMonth))
