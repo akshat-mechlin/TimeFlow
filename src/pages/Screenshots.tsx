@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
@@ -432,6 +432,16 @@ export default function Screenshots({ user }: ScreenshotsProps) {
               />
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => fetchScreenshots()}
+            disabled={loading}
+            className="flex items-center space-x-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh screenshots"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <span className="text-sm">Refresh</span>
+          </button>
         </div>
 
         <div className="flex items-center space-x-4 flex-wrap">
