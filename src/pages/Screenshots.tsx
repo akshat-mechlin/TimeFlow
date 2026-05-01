@@ -1,19 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, ZoomOut, MousePointer, Keyboard, TrendingUp, FolderKanban, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
-
-/** Base URL for screenshot/camera file server. Change for production (e.g. env VITE_SCREENSHOT_SERVER_URL). */
-const SCREENSHOT_SERVER_BASE_URL = 'https://timeflowstorage.mechlintech.com'
-
-/** Build URL for a screenshot/camera file from the local file server: /file?date=YYYY-MM-DD&path=... */
-function buildScreenshotFileUrl(path: string, date: string): string {
-  const dateParam = date || format(new Date(), 'yyyy-MM-dd')
-  return `${SCREENSHOT_SERVER_BASE_URL}/file?date=${dateParam}&path=${encodeURIComponent(path)}`
-}
 
 type Profile = Tables<'profiles'>
 type Screenshot = Tables<'screenshots'>
@@ -49,6 +40,38 @@ interface HourlyGroup {
   hour: number
   hourLabel: string
   screenshots: ScreenshotWithDetails[]
+}
+
+/** Screenshot-storage-server origin; loads images via GET /file?... */
+const SCREENSHOT_STORAGE_BASE_URL = 'https://timeflowstorage.mechlintech.com'.replace(/\/$/, '')
+
+function normalizeScreenshotStoragePath(storagePath: string, screenshotType?: string): string {
+  const isCamera = screenshotType === 'camera' || screenshotType === 'webcam'
+  let finalPath = storagePath
+  if (isCamera && !finalPath.startsWith('camera/')) {
+    finalPath = `camera/${finalPath}`
+  } else if (!isCamera && finalPath.startsWith('camera/')) {
+    finalPath = finalPath.replace(/^camera\//, '')
+  }
+  return finalPath
+}
+
+/** storage_path shape: screenshots/{uuid}/file.png or camera/{uuid}/file.png → matches on-disk layout under timeflow-screenshots */
+function buildScreenshotStorageServerUrl(normalizedPath: string): string | null {
+  if (!SCREENSHOT_STORAGE_BASE_URL) return null
+  const segments = normalizedPath.split('/').filter(Boolean)
+  if (segments.length < 3) return null
+  const folderType = segments[0]
+  if (folderType !== 'screenshots' && folderType !== 'camera') return null
+  const uuid = segments[1]
+  const fileName = segments.slice(2).join('/')
+  if (!uuid || !fileName) return null
+  const params = new URLSearchParams({
+    type: folderType,
+    uuid,
+    file: fileName,
+  })
+  return `${SCREENSHOT_STORAGE_BASE_URL}/file?${params.toString()}`
 }
 
 export default function Screenshots({ user }: ScreenshotsProps) {
@@ -171,26 +194,17 @@ export default function Screenshots({ user }: ScreenshotsProps) {
     }
   }
 
-  /** Build image URL from local screenshot server (date + path). Uses selectedDate for date when not passed. */
-  const getImageUrl = (
-    storagePath: string,
-    screenshotId: string,
-    screenshotType?: string,
-    dateForFile?: string
-  ): string => {
-    if (imageUrls[screenshotId]) return imageUrls[screenshotId]
-
-    const isCamera = screenshotType === 'camera' || screenshotType === 'webcam'
-    let finalPath = storagePath
-    if (isCamera && !storagePath.startsWith('camera/')) {
-      finalPath = `camera/${storagePath}`
-    } else if (!isCamera && storagePath.startsWith('camera/')) {
-      finalPath = storagePath.replace(/^camera\//, '')
+  /** Image binary is served only from screenshot-storage-server (SCREENSHOT_STORAGE_BASE_URL). */
+  const getImageUrl = (storagePath: string, screenshotId: string, screenshotType?: string): string => {
+    if (imageUrls[screenshotId]) {
+      return imageUrls[screenshotId]
     }
 
-    const date = dateForFile || selectedDate
-    const url = buildScreenshotFileUrl(finalPath, date)
-    setImageUrls(prev => ({ ...prev, [screenshotId]: url }))
+    const finalPath = normalizeScreenshotStoragePath(storagePath, screenshotType)
+    const url = buildScreenshotStorageServerUrl(finalPath) ?? ''
+    if (url) {
+      setImageUrls((prev) => ({ ...prev, [screenshotId]: url }))
+    }
     return url
   }
 
@@ -264,16 +278,21 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       const { data, error } = await query.limit(500)
 
       if (error) throw error
-      
-      // Pre-fetch image URLs from local screenshot server (date + path)
+
       const screenshotsWithUrls = (data || []).map((screenshot) => {
-        const dateForFile = screenshot.taken_at
-          ? format(new Date(screenshot.taken_at), 'yyyy-MM-dd')
-          : selectedDate
-        const url = getImageUrl(screenshot.storage_path, screenshot.id, screenshot.type, dateForFile)
+        const finalPath = normalizeScreenshotStoragePath(screenshot.storage_path, screenshot.type)
+        const url = buildScreenshotStorageServerUrl(finalPath) ?? ''
         return { ...screenshot, imageUrl: url }
       })
-      
+
+      setImageUrls((prev) => {
+        const next = { ...prev }
+        for (const s of screenshotsWithUrls) {
+          if (s.imageUrl) next[s.id] = s.imageUrl
+        }
+        return next
+      })
+
       setScreenshots(screenshotsWithUrls as any)
     } catch (error) {
       console.error('Error fetching screenshots:', error)
@@ -395,6 +414,16 @@ export default function Screenshots({ user }: ScreenshotsProps) {
               />
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => fetchScreenshots()}
+            disabled={loading}
+            className="flex items-center space-x-2 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh screenshots"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <span className="text-sm">Refresh</span>
+          </button>
         </div>
 
         <div className="flex items-center space-x-4 flex-wrap">
@@ -564,16 +593,12 @@ export default function Screenshots({ user }: ScreenshotsProps) {
               <div className="p-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {group.screenshots.map((screenshot) => {
-                    // Determine correct path for camera shots
                     const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
-                    let finalPath = screenshot.storage_path
-                    if (isCamera && !finalPath.startsWith('camera/')) {
-                      finalPath = `camera/${finalPath}`
-                    } else if (!isCamera && finalPath.startsWith('camera/')) {
-                      finalPath = finalPath.replace(/^camera\//, '')
-                    }
-                    const dateForFile = screenshot.taken_at ? format(new Date(screenshot.taken_at), 'yyyy-MM-dd') : selectedDate
-                    const imageUrl = screenshot.imageUrl || imageUrls[screenshot.id] || getImageUrl(finalPath, screenshot.id, screenshot.type, dateForFile)
+                    const finalPath = normalizeScreenshotStoragePath(screenshot.storage_path, screenshot.type)
+                    const imageUrl =
+                      screenshot.imageUrl ||
+                      imageUrls[screenshot.id] ||
+                      getImageUrl(finalPath, screenshot.id, screenshot.type)
                     
                     return (
                       <div
@@ -589,18 +614,6 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                             loading="lazy"
                             onError={(e) => {
                               console.error('Failed to load image:', imageUrl, 'Path:', screenshot.storage_path)
-                              // Try fallback with selectedDate as date (in case taken_at date differs from folder)
-                              const fallbackDate = selectedDate
-                              const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
-                              let finalPath = screenshot.storage_path
-                              if (isCamera && !finalPath.startsWith('camera/')) finalPath = `camera/${finalPath}`
-                              else if (!isCamera && finalPath.startsWith('camera/')) finalPath = finalPath.replace(/^camera\//, '')
-                              const fallbackUrl = buildScreenshotFileUrl(finalPath, fallbackDate)
-                              if (fallbackUrl !== imageUrl) {
-                                e.currentTarget.src = fallbackUrl
-                                setImageUrls(prev => ({ ...prev, [screenshot.id]: fallbackUrl }))
-                                return
-                              }
                               e.currentTarget.style.display = 'none'
                               const fallback = e.currentTarget.parentElement?.querySelector('.image-fallback') as HTMLElement
                               if (fallback) fallback.classList.remove('hidden')
@@ -875,15 +888,15 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                 <img
                   ref={imageRef}
                   src={(() => {
-                    const isCamera = selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam'
-                    let finalPath = selectedScreenshot.storage_path
-                    if (isCamera && !finalPath.startsWith('camera/')) {
-                      finalPath = `camera/${finalPath}`
-                    } else if (!isCamera && finalPath.startsWith('camera/')) {
-                      finalPath = finalPath.replace(/^camera\//, '')
-                    }
-                    const dateForFile = selectedScreenshot.taken_at ? format(new Date(selectedScreenshot.taken_at), 'yyyy-MM-dd') : selectedDate
-                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type, dateForFile)
+                    const finalPath = normalizeScreenshotStoragePath(
+                      selectedScreenshot.storage_path,
+                      selectedScreenshot.type
+                    )
+                    return (
+                      selectedScreenshot.imageUrl ||
+                      imageUrls[selectedScreenshot.id] ||
+                      getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    )
                   })()}
                   alt={(selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam') ? 'Camera shot' : 'Screenshot'}
                   className="transition-transform duration-200 ease-out select-none"
@@ -998,15 +1011,15 @@ export default function Screenshots({ user }: ScreenshotsProps) {
               <div className="flex items-center space-x-3">
                 <a
                   href={(() => {
-                    const isCamera = selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam'
-                    let finalPath = selectedScreenshot.storage_path
-                    if (isCamera && !finalPath.startsWith('camera/')) {
-                      finalPath = `camera/${finalPath}`
-                    } else if (!isCamera && finalPath.startsWith('camera/')) {
-                      finalPath = finalPath.replace(/^camera\//, '')
-                    }
-                    const dateForFile = selectedScreenshot.taken_at ? format(new Date(selectedScreenshot.taken_at), 'yyyy-MM-dd') : selectedDate
-                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type, dateForFile)
+                    const finalPath = normalizeScreenshotStoragePath(
+                      selectedScreenshot.storage_path,
+                      selectedScreenshot.type
+                    )
+                    return (
+                      selectedScreenshot.imageUrl ||
+                      imageUrls[selectedScreenshot.id] ||
+                      getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    )
                   })()}
                   download
                   className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
