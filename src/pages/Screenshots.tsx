@@ -42,6 +42,38 @@ interface HourlyGroup {
   screenshots: ScreenshotWithDetails[]
 }
 
+/** Screenshot-storage-server origin; loads images via GET /file?... */
+const SCREENSHOT_STORAGE_BASE_URL = 'https://timeflowstorage.mechlintech.com'.replace(/\/$/, '')
+
+function normalizeScreenshotStoragePath(storagePath: string, screenshotType?: string): string {
+  const isCamera = screenshotType === 'camera' || screenshotType === 'webcam'
+  let finalPath = storagePath
+  if (isCamera && !finalPath.startsWith('camera/')) {
+    finalPath = `camera/${finalPath}`
+  } else if (!isCamera && finalPath.startsWith('camera/')) {
+    finalPath = finalPath.replace(/^camera\//, '')
+  }
+  return finalPath
+}
+
+/** storage_path shape: screenshots/{uuid}/file.png or camera/{uuid}/file.png → matches on-disk layout under timeflow-screenshots */
+function buildScreenshotStorageServerUrl(normalizedPath: string): string | null {
+  if (!SCREENSHOT_STORAGE_BASE_URL) return null
+  const segments = normalizedPath.split('/').filter(Boolean)
+  if (segments.length < 3) return null
+  const folderType = segments[0]
+  if (folderType !== 'screenshots' && folderType !== 'camera') return null
+  const uuid = segments[1]
+  const fileName = segments.slice(2).join('/')
+  if (!uuid || !fileName) return null
+  const params = new URLSearchParams({
+    type: folderType,
+    uuid,
+    file: fileName,
+  })
+  return `${SCREENSHOT_STORAGE_BASE_URL}/file?${params.toString()}`
+}
+
 export default function Screenshots({ user }: ScreenshotsProps) {
   const [screenshots, setScreenshots] = useState<ScreenshotWithDetails[]>([])
   const [loading, setLoading] = useState(true)
@@ -162,46 +194,18 @@ export default function Screenshots({ user }: ScreenshotsProps) {
     }
   }
 
+  /** Image binary is served only from screenshot-storage-server (SCREENSHOT_STORAGE_BASE_URL). */
   const getImageUrl = (storagePath: string, screenshotId: string, screenshotType?: string): string => {
-    // Check if we already have the URL cached
     if (imageUrls[screenshotId]) {
       return imageUrls[screenshotId]
     }
 
-    // Get Supabase URL
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL || 'https://yxkniwzsinqyjdqqzyjs.supabase.co'
-    
-    // All images are stored in the "screenshots" bucket
-    // Camera shots are in the "camera/" folder, regular screenshots are in the root
-    const bucketName = 'screenshots'
-    
-    // Determine the correct path
-    // If it's a camera shot and path doesn't start with "camera/", prepend it
-    const isCamera = screenshotType === 'camera' || screenshotType === 'webcam'
-    let finalPath = storagePath
-    if (isCamera && !storagePath.startsWith('camera/')) {
-      finalPath = `camera/${storagePath}`
-    } else if (!isCamera && storagePath.startsWith('camera/')) {
-      // If it's not a camera shot but path has camera prefix, remove it (shouldn't happen, but handle it)
-      finalPath = storagePath.replace(/^camera\//, '')
+    const finalPath = normalizeScreenshotStoragePath(storagePath, screenshotType)
+    const url = buildScreenshotStorageServerUrl(finalPath) ?? ''
+    if (url) {
+      setImageUrls((prev) => ({ ...prev, [screenshotId]: url }))
     }
-    
-    // Try to get public URL using Supabase storage client
-    try {
-      const { data } = supabase.storage.from(bucketName).getPublicUrl(finalPath)
-      if (data?.publicUrl) {
-        const url = data.publicUrl
-        setImageUrls(prev => ({ ...prev, [screenshotId]: url }))
-        return url
-      }
-    } catch (e) {
-      // Continue to fallback
-    }
-
-    // Fallback: construct URL manually
-    const fallbackUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${finalPath}`
-    setImageUrls(prev => ({ ...prev, [screenshotId]: fallbackUrl }))
-    return fallbackUrl
+    return url
   }
 
   const fetchScreenshots = async () => {
@@ -274,43 +278,21 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       const { data, error } = await query.limit(500)
 
       if (error) throw error
-      
-      // Pre-fetch image URLs for all screenshots
-      // Try to get signed URLs if public URLs don't work
-      const screenshotsWithUrls = await Promise.all(
-        (data || []).map(async (screenshot) => {
-          // Determine correct path: camera shots go in camera/ folder
-          const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
-          let finalPath = screenshot.storage_path
-          if (isCamera && !finalPath.startsWith('camera/')) {
-            finalPath = `camera/${finalPath}`
-          } else if (!isCamera && finalPath.startsWith('camera/')) {
-            // Remove camera prefix if it's not a camera shot
-            finalPath = finalPath.replace(/^camera\//, '')
-          }
-          
-          let url = getImageUrl(finalPath, screenshot.id, screenshot.type)
-          
-          // Try to get a signed URL if the bucket is private
-          // All images are in the "screenshots" bucket
-          try {
-            const bucketName = 'screenshots'
-            const { data: signedData, error: signedError } = await supabase.storage
-              .from(bucketName)
-              .createSignedUrl(finalPath, 3600) // 1 hour expiry
-            
-            if (signedData?.signedUrl && !signedError) {
-              url = signedData.signedUrl
-              setImageUrls(prev => ({ ...prev, [screenshot.id]: url }))
-            }
-          } catch (e) {
-            // Use the public URL we already have
-          }
 
-          return { ...screenshot, imageUrl: url }
-        })
-      )
-      
+      const screenshotsWithUrls = (data || []).map((screenshot) => {
+        const finalPath = normalizeScreenshotStoragePath(screenshot.storage_path, screenshot.type)
+        const url = buildScreenshotStorageServerUrl(finalPath) ?? ''
+        return { ...screenshot, imageUrl: url }
+      })
+
+      setImageUrls((prev) => {
+        const next = { ...prev }
+        for (const s of screenshotsWithUrls) {
+          if (s.imageUrl) next[s.id] = s.imageUrl
+        }
+        return next
+      })
+
       setScreenshots(screenshotsWithUrls as any)
     } catch (error) {
       console.error('Error fetching screenshots:', error)
@@ -611,15 +593,12 @@ export default function Screenshots({ user }: ScreenshotsProps) {
               <div className="p-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {group.screenshots.map((screenshot) => {
-                    // Determine correct path for camera shots
                     const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
-                    let finalPath = screenshot.storage_path
-                    if (isCamera && !finalPath.startsWith('camera/')) {
-                      finalPath = `camera/${finalPath}`
-                    } else if (!isCamera && finalPath.startsWith('camera/')) {
-                      finalPath = finalPath.replace(/^camera\//, '')
-                    }
-                    const imageUrl = screenshot.imageUrl || imageUrls[screenshot.id] || getImageUrl(finalPath, screenshot.id, screenshot.type)
+                    const finalPath = normalizeScreenshotStoragePath(screenshot.storage_path, screenshot.type)
+                    const imageUrl =
+                      screenshot.imageUrl ||
+                      imageUrls[screenshot.id] ||
+                      getImageUrl(finalPath, screenshot.id, screenshot.type)
                     
                     return (
                       <div
@@ -633,35 +612,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                             alt={isCamera ? 'Camera shot' : 'Screenshot'}
                             className="w-full h-full object-cover"
                             loading="lazy"
-                            onError={async (e) => {
+                            onError={(e) => {
                               console.error('Failed to load image:', imageUrl, 'Path:', screenshot.storage_path)
-                              
-                              // Try to get a signed URL as fallback
-                              // All images are in the "screenshots" bucket
-                              // Camera shots are in camera/ folder
-                              try {
-                                const isCamera = screenshot.type === 'camera' || screenshot.type === 'webcam'
-                                let finalPath = screenshot.storage_path
-                                if (isCamera && !finalPath.startsWith('camera/')) {
-                                  finalPath = `camera/${finalPath}`
-                                } else if (!isCamera && finalPath.startsWith('camera/')) {
-                                  finalPath = finalPath.replace(/^camera\//, '')
-                                }
-                                
-                                const { data: signedData, error: signedError } = await supabase.storage
-                                  .from('screenshots')
-                                  .createSignedUrl(finalPath, 3600)
-                                
-                                if (signedData?.signedUrl && !signedError) {
-                                  e.currentTarget.src = signedData.signedUrl
-                                  setImageUrls(prev => ({ ...prev, [screenshot.id]: signedData.signedUrl }))
-                                  return
-                                }
-                              } catch (err) {
-                                console.error('Failed to get signed URL:', err)
-                              }
-                              
-                              // If still failed, hide image and show fallback
                               e.currentTarget.style.display = 'none'
                               const fallback = e.currentTarget.parentElement?.querySelector('.image-fallback') as HTMLElement
                               if (fallback) fallback.classList.remove('hidden')
@@ -936,14 +888,15 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                 <img
                   ref={imageRef}
                   src={(() => {
-                    const isCamera = selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam'
-                    let finalPath = selectedScreenshot.storage_path
-                    if (isCamera && !finalPath.startsWith('camera/')) {
-                      finalPath = `camera/${finalPath}`
-                    } else if (!isCamera && finalPath.startsWith('camera/')) {
-                      finalPath = finalPath.replace(/^camera\//, '')
-                    }
-                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    const finalPath = normalizeScreenshotStoragePath(
+                      selectedScreenshot.storage_path,
+                      selectedScreenshot.type
+                    )
+                    return (
+                      selectedScreenshot.imageUrl ||
+                      imageUrls[selectedScreenshot.id] ||
+                      getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    )
                   })()}
                   alt={(selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam') ? 'Camera shot' : 'Screenshot'}
                   className="transition-transform duration-200 ease-out select-none"
@@ -1058,14 +1011,15 @@ export default function Screenshots({ user }: ScreenshotsProps) {
               <div className="flex items-center space-x-3">
                 <a
                   href={(() => {
-                    const isCamera = selectedScreenshot.type === 'camera' || selectedScreenshot.type === 'webcam'
-                    let finalPath = selectedScreenshot.storage_path
-                    if (isCamera && !finalPath.startsWith('camera/')) {
-                      finalPath = `camera/${finalPath}`
-                    } else if (!isCamera && finalPath.startsWith('camera/')) {
-                      finalPath = finalPath.replace(/^camera\//, '')
-                    }
-                    return selectedScreenshot.imageUrl || imageUrls[selectedScreenshot.id] || getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    const finalPath = normalizeScreenshotStoragePath(
+                      selectedScreenshot.storage_path,
+                      selectedScreenshot.type
+                    )
+                    return (
+                      selectedScreenshot.imageUrl ||
+                      imageUrls[selectedScreenshot.id] ||
+                      getImageUrl(finalPath, selectedScreenshot.id, selectedScreenshot.type)
+                    )
                   })()}
                   download
                   className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
