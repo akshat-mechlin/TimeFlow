@@ -563,6 +563,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
           try {
             const parsed = JSON.parse(value)
             // If parsed result is a string, use it (removes outer quotes)
+            // If parsed result is a string, use it (removes outer quotes)
+            // If parsed result is a string, use it (removes outer quotes)
             // If it's an object/array/number/boolean, use the parsed value
             value = parsed
           } catch {
