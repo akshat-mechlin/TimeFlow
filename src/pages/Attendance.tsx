@@ -62,6 +62,7 @@ export default function Attendance({ user }: AttendanceProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const selectedUserIdsRef = useRef<string[]>(selectedUserIds)
+  const fetchRequestIdRef = useRef(0)
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
   const [userDropdownPosition, setUserDropdownPosition] = useState({ top: 0, left: 0 })
@@ -177,7 +178,15 @@ export default function Attendance({ user }: AttendanceProps) {
   }
 
 
+  const isQueryTimeoutError = (err: { code?: string; message?: string }) =>
+    err.code === '57014' ||
+    err.message?.includes('timeout') ||
+    err.message?.includes('canceling statement') ||
+    err.message?.includes('statement timeout')
+
   const fetchAttendanceRecords = async () => {
+    const requestId = ++fetchRequestIdRef.current
+
     try {
       setLoading(true)
       setError(null)
@@ -204,60 +213,64 @@ export default function Attendance({ user }: AttendanceProps) {
       const isSelectAllMode = currentSelectedUserIds.length === 0 && 
         (user.role === 'admin' || user.role === 'manager' || user.role === 'hr' || user.role === 'accountant')
 
-      // For Select All mode, fetch basic data first to avoid timeout
-      // For specific users, fetch full nested data
-      const selectQuery = isSelectAllMode 
-        ? `id, user_id, start_time, end_time, duration, description, app_version, profile:profiles!time_entries_user_id_fkey(id, full_name, email, team)`
-        : `*,
-          profile:profiles!time_entries_user_id_fkey(*),
-          project_time_entries(
-            project_id,
-            billable,
-            projects(
-              id,
-              name,
-              task_id,
-              tasks(name)
-            )
-          ),
-          screenshots(
+      // Lightweight query (matches Dashboard/Reports) — avoid nested screenshots/activity_logs
+      // which are not displayed on this page and cause intermittent statement timeouts
+      const selectQuery = `id, user_id, start_time, end_time, duration, description, app_version,
+        profile:profiles!time_entries_user_id_fkey(id, full_name, email, team),
+        project_time_entries(
+          project_id,
+          billable,
+          projects(
             id,
-            activity_logs(
-              keystrokes,
-              mouse_movements,
-              productivity_score
-            )
-          )`
-      
-      let query = supabase
-        .from('time_entries')
-        .select(selectQuery)
-        .gte('start_time', queryStart.toISOString())
-        .lte('start_time', queryEnd.toISOString())
-        .order('start_time', { ascending: false })
+            name,
+            task_id,
+            tasks(name)
+          )
+        )`
 
-      // Apply user filter - if specific users selected, filter by them
-      // IMPORTANT: Use currentSelectedUserIds to ensure we use the latest state
-      if (currentSelectedUserIds.length > 0) {
-        query = query.in('user_id', currentSelectedUserIds)
+      const limit = isSelectAllMode ? 5000 : 1000
+      const maxAttempts = 3
+      let timeEntries: unknown[] | null = null
+      let lastError: { code?: string; message?: string } | null = null
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (requestId !== fetchRequestIdRef.current) return
+
+        let query = supabase
+          .from('time_entries')
+          .select(selectQuery)
+          .gte('start_time', queryStart.toISOString())
+          .lte('start_time', queryEnd.toISOString())
+          .order('start_time', { ascending: false })
+
+        if (currentSelectedUserIds.length > 0) {
+          query = query.in('user_id', currentSelectedUserIds)
+        }
+
+        const { data, error } = await query.limit(limit)
+
+        if (!error) {
+          timeEntries = data
+          lastError = null
+          break
+        }
+
+        lastError = error
+        if (isQueryTimeoutError(error) && attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)))
+          continue
+        }
+        break
       }
 
-      // Increase limit for Select All mode, but still reasonable
-      // Note: For Select All with large date ranges, consider reducing the limit further
-      const limit = isSelectAllMode ? 5000 : 1000
-      
-      const { data: timeEntries, error } = await query.limit(limit)
+      if (requestId !== fetchRequestIdRef.current) return
 
-      if (error) {
-        // Handle specific timeout error (PostgreSQL error code 57014)
-        if (error.code === '57014' || 
-            error.message?.includes('timeout') || 
-            error.message?.includes('canceling statement') ||
-            error.message?.includes('statement timeout')) {
+      if (lastError) {
+        if (isQueryTimeoutError(lastError)) {
           throw new Error('Query timeout - the date range or number of users may be too large. Please try selecting fewer users or a smaller date range.')
         }
-        console.error('Supabase error:', error)
-        throw error
+        console.error('Supabase error:', lastError)
+        throw lastError
       }
 
       console.log('Fetched time entries:', timeEntries?.length || 0)
@@ -636,15 +649,20 @@ export default function Attendance({ user }: AttendanceProps) {
         // Continue with attendance records even if leave fetch fails
       }
 
+      if (requestId !== fetchRequestIdRef.current) return
+
       console.log('Calculated attendance records:', attendanceRecords.length)
       setRecords(attendanceRecords)
     } catch (err: any) {
+      if (requestId !== fetchRequestIdRef.current) return
       console.error('Error fetching attendance:', err)
       const errorMessage = err.message || 'Failed to fetch attendance records. Please try again.'
       setError(errorMessage)
       setRecords([])
     } finally {
-      setLoading(false)
+      if (requestId === fetchRequestIdRef.current) {
+        setLoading(false)
+      }
     }
   }
 
