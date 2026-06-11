@@ -45,6 +45,96 @@ interface HourlyGroup {
 /** Screenshot-storage-server origin; loads images via GET /file?... */
 const SCREENSHOT_STORAGE_BASE_URL = 'https://timeflowstorage.mechlintech.com'.replace(/\/$/, '')
 
+const QUERY_RETRY_ATTEMPTS = 3
+const QUERY_RETRY_DELAY_MS = 400
+const SCREENSHOTS_TIMEOUT_MSG = 'Query timed out loading screenshots. Please try again.'
+const SCREENSHOT_SELECT = 'id, storage_path, taken_at, time_entry_id, type, created_at'
+const TIME_ENTRY_SELECT = 'id, description, profile:profiles!time_entries_user_id_fkey(id, full_name)'
+const ACTIVITY_BATCH_SIZE = 100
+const PROJECT_BATCH_SIZE = 50
+const MAX_SCREENSHOTS = 500
+
+type SupabaseError = { code?: string; message?: string }
+
+type ScreenshotEntryRow = {
+  id: string
+  description: string | null
+  profile?: { id: string; full_name: string | null }
+}
+
+type ScreenshotActivityRow = {
+  screenshot_id: string
+  keystrokes: number
+  mouse_movements: number
+  productivity_score: number
+}
+
+type ScreenshotProjectRow = {
+  time_entry_id: string
+  project_id: string
+  projects?: { id: string; name: string; tasks?: { name: string } }
+}
+
+const isQueryTimeoutError = (err: SupabaseError) =>
+  err.code === '57014' ||
+  !!err.message?.match(/timeout|canceling statement|statement timeout/i)
+
+async function queryWithRetry<T>(
+  run: () => PromiseLike<{ data: T | null; error: SupabaseError | null }>,
+  timeoutMessage = SCREENSHOTS_TIMEOUT_MSG,
+): Promise<T> {
+  let lastError: SupabaseError | null = null
+  for (let attempt = 0; attempt < QUERY_RETRY_ATTEMPTS; attempt++) {
+    const { data, error } = await run()
+    if (!error) return (data ?? []) as T
+    lastError = error
+    if (isQueryTimeoutError(error) && attempt < QUERY_RETRY_ATTEMPTS - 1) {
+      await new Promise((r) => setTimeout(r, QUERY_RETRY_DELAY_MS * (attempt + 1)))
+      continue
+    }
+    break
+  }
+  if (lastError && isQueryTimeoutError(lastError)) throw new Error(timeoutMessage)
+  throw lastError ?? new Error('Failed to load screenshots')
+}
+
+async function fetchInBatches<T>(
+  ids: string[],
+  batchSize: number,
+  fetchBatch: (batchIds: string[]) => Promise<T[]>,
+): Promise<T[]> {
+  const results: T[] = []
+  for (let i = 0; i < ids.length; i += batchSize) {
+    results.push(...(await fetchBatch(ids.slice(i, i + batchSize))))
+  }
+  return results
+}
+
+function dedupeById<T extends { id: string }>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()]
+}
+
+function groupByKey<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
+  const map = new Map<string, T[]>()
+  for (const item of items) {
+    const key = keyFn(item)
+    const list = map.get(key)
+    if (list) list.push(item)
+    else map.set(key, [item])
+  }
+  return map
+}
+
+function applyScreenshotTypeFilter<T extends { in: (col: string, vals: string[]) => T; eq: (col: string, val: string) => T }>(
+  query: T,
+  typeFilter: 'all' | 'screenshot' | 'camera',
+): T {
+  if (typeFilter === 'camera') return query.in('type', ['camera', 'webcam'])
+  if (typeFilter === 'screenshot') return query.in('type', ['screen', 'screenshot', 'desktop'])
+  if (typeFilter !== 'all') return query.eq('type', typeFilter)
+  return query
+}
+
 function normalizeScreenshotStoragePath(storagePath: string, screenshotType?: string): string {
   const isCamera = screenshotType === 'camera' || screenshotType === 'webcam'
   let finalPath = storagePath
@@ -77,6 +167,7 @@ function buildScreenshotStorageServerUrl(normalizedPath: string): string | null 
 export default function Screenshots({ user }: ScreenshotsProps) {
   const [screenshots, setScreenshots] = useState<ScreenshotWithDetails[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [typeFilter, setTypeFilter] = useState<'all' | 'screenshot' | 'camera'>('all')
   const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'))
@@ -94,6 +185,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const userDropdownButtonRef = useRef<HTMLButtonElement>(null)
+  const fetchRequestIdRef = useRef(0)
+  const realtimeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [userDropdownPosition, setUserDropdownPosition] = useState({ top: 0, left: 0 })
 
   useEffect(() => {
@@ -149,8 +242,8 @@ export default function Screenshots({ user }: ScreenshotsProps) {
         },
         (payload) => {
           console.log('Screenshot change detected:', payload.eventType)
-          // Refetch screenshots when changes occur
-          fetchScreenshots()
+          if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current)
+          realtimeDebounceRef.current = setTimeout(() => fetchScreenshots(), 500)
         }
       )
       .subscribe((status) => {
@@ -160,6 +253,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       })
 
     return () => {
+      if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current)
       supabase.removeChannel(channel)
     }
   }, [selectedUserId, typeFilter, selectedDate])
@@ -208,81 +302,112 @@ export default function Screenshots({ user }: ScreenshotsProps) {
     return url
   }
 
+  const fetchOverlappingEntries = (userId: string, dayStart: Date, dayEnd: Date) => {
+    let completed = supabase
+      .from('time_entries')
+      .select(TIME_ENTRY_SELECT)
+      .lte('start_time', dayEnd.toISOString())
+      .gte('end_time', dayStart.toISOString())
+    let running = supabase
+      .from('time_entries')
+      .select(TIME_ENTRY_SELECT)
+      .is('end_time', null)
+      .lte('start_time', dayEnd.toISOString())
+    if (userId) {
+      completed = completed.eq('user_id', userId)
+      running = running.eq('user_id', userId)
+    }
+    return Promise.all([
+      queryWithRetry<ScreenshotEntryRow[]>(() => completed),
+      queryWithRetry<ScreenshotEntryRow[]>(() => running),
+    ])
+  }
+
   const fetchScreenshots = async () => {
+    const requestId = ++fetchRequestIdRef.current
+
     try {
       setLoading(true)
-      
-      // Parse selected date
-      const date = parseISO(selectedDate)
-      const startDate = startOfDay(date)
-      const endDate = endOfDay(date)
+      setError(null)
 
-      let query = supabase
-        .from('screenshots')
-        .select(`
-          *,
-          time_entry:time_entries!screenshots_time_entry_id_fkey(
-            *,
-            profile:profiles!time_entries_user_id_fkey(*),
-            project_time_entries(
-              project_id,
-              projects(
-                id,
-                name,
-                tasks(name)
-              )
+      const dayStart = startOfDay(parseISO(selectedDate))
+      const dayEnd = endOfDay(parseISO(selectedDate))
+
+      const [completedEntries, runningEntries] = await fetchOverlappingEntries(selectedUserId, dayStart, dayEnd)
+      if (requestId !== fetchRequestIdRef.current) return
+
+      const userEntries = dedupeById([...completedEntries, ...runningEntries])
+      const entryMap = new Map(userEntries.map((entry) => [entry.id, entry]))
+      const entryIds = userEntries.map((entry) => entry.id)
+
+      if (entryIds.length === 0) {
+        setScreenshots([])
+        return
+      }
+
+      const shots = await queryWithRetry<Screenshot[]>(() =>
+        applyScreenshotTypeFilter(
+          supabase
+            .from('screenshots')
+            .select(SCREENSHOT_SELECT)
+            .in('time_entry_id', entryIds)
+            .gte('taken_at', dayStart.toISOString())
+            .lte('taken_at', dayEnd.toISOString())
+            .order('taken_at', { ascending: false })
+            .limit(MAX_SCREENSHOTS),
+          typeFilter,
+        ),
+      )
+
+      if (requestId !== fetchRequestIdRef.current) return
+
+      const screenshotIds = shots.map((shot) => shot.id)
+      const shotEntryIds = [...new Set(shots.map((shot) => shot.time_entry_id))]
+
+      const [activityLogs, projectEntries] = await Promise.all([
+        screenshotIds.length > 0
+          ? fetchInBatches(screenshotIds, ACTIVITY_BATCH_SIZE, (batchIds) =>
+              queryWithRetry<ScreenshotActivityRow[]>(() =>
+                supabase
+                  .from('activity_logs')
+                  .select('screenshot_id, keystrokes, mouse_movements, productivity_score')
+                  .in('screenshot_id', batchIds),
+              ),
             )
-          ),
-          activity_logs(
-            keystrokes,
-            mouse_movements,
-            productivity_score
-          )
-        `)
-        .order('taken_at', { ascending: false })
+          : Promise.resolve([] as ScreenshotActivityRow[]),
+        shotEntryIds.length > 0
+          ? fetchInBatches(shotEntryIds, PROJECT_BATCH_SIZE, (batchIds) =>
+              queryWithRetry<ScreenshotProjectRow[]>(() =>
+                supabase
+                  .from('project_time_entries')
+                  .select('time_entry_id, project_id, projects(id, name, tasks(name))')
+                  .in('time_entry_id', batchIds),
+              ),
+            )
+          : Promise.resolve([] as ScreenshotProjectRow[]),
+      ])
 
-      // Apply date filter - filter by the selected date
-      query = query.gte('taken_at', startDate.toISOString())
-      query = query.lte('taken_at', endDate.toISOString())
+      if (requestId !== fetchRequestIdRef.current) return
 
-      // Apply type filter
-      if (typeFilter !== 'all') {
-        if (typeFilter === 'camera') {
-          // Handle camera types: 'camera', 'webcam'
-          query = query.in('type', ['camera', 'webcam'])
-        } else if (typeFilter === 'screenshot') {
-          // Handle screenshot types: 'screen', 'screenshot', 'desktop'
-          query = query.in('type', ['screen', 'screenshot', 'desktop'])
-        } else {
-          query = query.eq('type', typeFilter)
+      const logsByScreenshot = groupByKey(activityLogs, (log) => log.screenshot_id)
+      const projectsByEntry = groupByKey(projectEntries, (pte) => pte.time_entry_id)
+
+      const screenshotsWithUrls: ScreenshotWithDetails[] = shots.map((shot) => {
+        const entry = entryMap.get(shot.time_entry_id)
+        const finalPath = normalizeScreenshotStoragePath(shot.storage_path, shot.type)
+        return {
+          ...shot,
+          imageUrl: buildScreenshotStorageServerUrl(finalPath) ?? '',
+          time_entry: entry
+            ? {
+                id: entry.id,
+                description: entry.description,
+                profile: entry.profile as Profile | undefined,
+                project_time_entries: projectsByEntry.get(shot.time_entry_id) ?? [],
+              }
+            : undefined,
+          activity_logs: logsByScreenshot.get(shot.id) ?? [],
         }
-      }
-
-      // Apply user filter - filter by selected user
-      if (selectedUserId) {
-        // Get time entries for the selected user
-        const { data: userEntries } = await supabase
-          .from('time_entries')
-          .select('id')
-          .eq('user_id', selectedUserId)
-
-        const entryIds = userEntries?.map((e) => e.id) || []
-        if (entryIds.length > 0) {
-          query = query.in('time_entry_id', entryIds)
-        } else {
-          // No entries for this user, return empty result
-          query = query.eq('time_entry_id', '00000000-0000-0000-0000-000000000000')
-        }
-      }
-
-      const { data, error } = await query.limit(500)
-
-      if (error) throw error
-
-      const screenshotsWithUrls = (data || []).map((screenshot) => {
-        const finalPath = normalizeScreenshotStoragePath(screenshot.storage_path, screenshot.type)
-        const url = buildScreenshotStorageServerUrl(finalPath) ?? ''
-        return { ...screenshot, imageUrl: url }
       })
 
       setImageUrls((prev) => {
@@ -293,11 +418,16 @@ export default function Screenshots({ user }: ScreenshotsProps) {
         return next
       })
 
-      setScreenshots(screenshotsWithUrls as any)
-    } catch (error) {
-      console.error('Error fetching screenshots:', error)
+      setScreenshots(screenshotsWithUrls)
+    } catch (err: any) {
+      if (requestId !== fetchRequestIdRef.current) return
+      console.error('Error fetching screenshots:', err)
+      setError(err.message || 'Failed to load screenshots. Please try again.')
+      setScreenshots([])
     } finally {
-      setLoading(false)
+      if (requestId === fetchRequestIdRef.current) {
+        setLoading(false)
+      }
     }
   }
 
@@ -565,12 +695,28 @@ export default function Screenshots({ user }: ScreenshotsProps) {
         </div>
       </div>
 
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null)
+              fetchScreenshots()
+            }}
+            className="mt-2 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
       {/* Screenshots Grid - Grouped by Hour */}
       {loading ? (
         <div className="py-12">
           <Loader size="lg" text="Loading screenshots" />
         </div>
-      ) : hourlyGroups.length === 0 ? (
+      ) : error ? null : hourlyGroups.length === 0 ? (
         <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-12 text-center backdrop-blur-sm">
           <Image className="w-16 h-16 mx-auto mb-4 text-gray-300" />
           <p className="text-gray-500">No screenshots found for {format(parseISO(selectedDate), 'MMMM d, yyyy')}</p>
