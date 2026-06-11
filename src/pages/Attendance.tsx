@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase, hrmsSupabase } from '../lib/supabase'
 import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info, FileText } from 'lucide-react'
-import { format, parseISO, subDays, subHours } from 'date-fns'
+import { format, parseISO, subDays } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
@@ -11,6 +11,85 @@ import autoTable from 'jspdf-autotable'
 
 type Profile = Tables<'profiles'>
 type TimeEntry = Tables<'time_entries'> & { profile?: Profile }
+type SupabaseError = { code?: string; message?: string }
+
+const IST_TIMEZONE = 'Asia/Kolkata'
+const QUERY_RETRY_ATTEMPTS = 3
+const QUERY_RETRY_DELAY_MS = 400
+const ATTENDANCE_TIMEOUT_MSG =
+  'Query timeout - the date range or number of users may be too large. Please try selecting fewer users or a smaller date range.'
+
+const TIME_ENTRIES_SELECT = `id, user_id, start_time, end_time, duration, description, app_version,
+  profile:profiles!time_entries_user_id_fkey(id, full_name, email, team),
+  project_time_entries(
+    project_id,
+    billable,
+    projects(id, name, task_id, tasks(name))
+  )`
+
+const isQueryTimeoutError = (err: SupabaseError) =>
+  err.code === '57014' ||
+  !!err.message?.match(/timeout|canceling statement|statement timeout/i)
+
+async function queryWithRetry<T>(
+  run: () => PromiseLike<{ data: T | null; error: SupabaseError | null }>,
+  timeoutMessage: string,
+): Promise<T> {
+  let lastError: SupabaseError | null = null
+  for (let attempt = 0; attempt < QUERY_RETRY_ATTEMPTS; attempt++) {
+    const { data, error } = await run()
+    if (!error) return data as T
+    lastError = error
+    if (isQueryTimeoutError(error) && attempt < QUERY_RETRY_ATTEMPTS - 1) {
+      await new Promise((r) => setTimeout(r, QUERY_RETRY_DELAY_MS * (attempt + 1)))
+      continue
+    }
+    break
+  }
+  if (lastError && isQueryTimeoutError(lastError)) throw new Error(timeoutMessage)
+  throw lastError ?? new Error('Failed to fetch attendance records')
+}
+
+function getAttendanceStatus(hoursWorked: number): 'present' | 'half_day' | 'absent' {
+  if (hoursWorked >= 8) return 'present'
+  if (hoursWorked >= 4) return 'half_day'
+  return 'absent'
+}
+
+function mapEntryProjects(entry: {
+  project_time_entries?: Array<{
+    project_id: string
+    projects?: { name?: string; tasks?: { name?: string } }
+  }>
+}) {
+  return (entry.project_time_entries || [])
+    .map((pte) => ({
+      project_id: pte.project_id,
+      project_name: pte.projects?.name || 'No Project',
+      task_name: pte.projects?.tasks?.name || null,
+    }))
+    .filter((p) => p.project_id && p.project_name !== 'No Project')
+}
+
+function getMostCommonVersion(versions: (string | null | undefined)[]): string | null {
+  const valid = versions.filter(Boolean) as string[]
+  if (valid.length === 0) return null
+  return valid.reduce((a, b, _, arr) =>
+    arr.filter((v) => v === a).length >= arr.filter((v) => v === b).length ? a : b,
+  )
+}
+
+function leaveDatesInRange(leaveStart: string, leaveEnd: string, rangeStart: string, rangeEnd: string): string[] {
+  const dates: string[] = []
+  const current = parseISO(leaveStart)
+  const end = parseISO(leaveEnd)
+  while (current <= end) {
+    const dateStr = format(current, 'yyyy-MM-dd')
+    if (dateStr >= rangeStart && dateStr <= rangeEnd) dates.push(dateStr)
+    current.setDate(current.getDate() + 1)
+  }
+  return dates
+}
 
 interface AttendanceProps {
   user: Profile
@@ -38,11 +117,6 @@ interface AttendanceRecord {
       project_name: string
       task_name?: string
     }>
-    activity?: {
-      totalKeystrokes: number
-      totalMouseMovements: number
-      productivityScore: number
-    }
   }>
 }
 
@@ -78,9 +152,6 @@ export default function Attendance({ user }: AttendanceProps) {
     duration: '', // Duration in hours (as string for input)
     description: '',
   })
-
-  const IST_TIMEZONE = 'Asia/Kolkata'
-  const TRACKER_RESET_HOUR = 0 // 12 AM (midnight) IST
 
   // Today and date ranges in IST so attendance is consistent regardless of machine timezone
   const getTodayIST = () => format(toZonedTime(new Date(), IST_TIMEZONE), 'yyyy-MM-dd')
@@ -178,12 +249,6 @@ export default function Attendance({ user }: AttendanceProps) {
   }
 
 
-  const isQueryTimeoutError = (err: { code?: string; message?: string }) =>
-    err.code === '57014' ||
-    err.message?.includes('timeout') ||
-    err.message?.includes('canceling statement') ||
-    err.message?.includes('statement timeout')
-
   const fetchAttendanceRecords = async () => {
     const requestId = ++fetchRequestIdRef.current
 
@@ -213,79 +278,30 @@ export default function Attendance({ user }: AttendanceProps) {
       const isSelectAllMode = currentSelectedUserIds.length === 0 && 
         (user.role === 'admin' || user.role === 'manager' || user.role === 'hr' || user.role === 'accountant')
 
-      // Lightweight query (matches Dashboard/Reports) — avoid nested screenshots/activity_logs
-      // which are not displayed on this page and cause intermittent statement timeouts
-      const selectQuery = `id, user_id, start_time, end_time, duration, description, app_version,
-        profile:profiles!time_entries_user_id_fkey(id, full_name, email, team),
-        project_time_entries(
-          project_id,
-          billable,
-          projects(
-            id,
-            name,
-            task_id,
-            tasks(name)
-          )
-        )`
-
       const limit = isSelectAllMode ? 5000 : 1000
-      const maxAttempts = 3
-      let timeEntries: unknown[] | null = null
-      let lastError: { code?: string; message?: string } | null = null
 
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        if (requestId !== fetchRequestIdRef.current) return
+      const timeEntries = await queryWithRetry<TimeEntry[]>(
+        () => {
+          let query = supabase
+            .from('time_entries')
+            .select(TIME_ENTRIES_SELECT)
+            .gte('start_time', queryStart.toISOString())
+            .lte('start_time', queryEnd.toISOString())
+            .order('start_time', { ascending: false })
 
-        let query = supabase
-          .from('time_entries')
-          .select(selectQuery)
-          .gte('start_time', queryStart.toISOString())
-          .lte('start_time', queryEnd.toISOString())
-          .order('start_time', { ascending: false })
+          if (currentSelectedUserIds.length > 0) {
+            query = query.in('user_id', currentSelectedUserIds)
+          }
 
-        if (currentSelectedUserIds.length > 0) {
-          query = query.in('user_id', currentSelectedUserIds)
-        }
-
-        const { data, error } = await query.limit(limit)
-
-        if (!error) {
-          timeEntries = data
-          lastError = null
-          break
-        }
-
-        lastError = error
-        if (isQueryTimeoutError(error) && attempt < maxAttempts - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)))
-          continue
-        }
-        break
-      }
+          return query.limit(limit)
+        },
+        ATTENDANCE_TIMEOUT_MSG,
+      )
 
       if (requestId !== fetchRequestIdRef.current) return
 
-      if (lastError) {
-        if (isQueryTimeoutError(lastError)) {
-          throw new Error('Query timeout - the date range or number of users may be too large. Please try selecting fewer users or a smaller date range.')
-        }
-        console.error('Supabase error:', lastError)
-        throw lastError
-      }
-
-      console.log('Fetched time entries:', timeEntries?.length || 0)
-
-      // Calculate attendance records from time entries
       const attendanceMap = new Map<string, AttendanceRecord>()
-
-      // Get all unique user IDs from time entries
-      const userIds = new Set<string>()
-      const entries = (timeEntries || []) as unknown as Array<TimeEntry & { profile?: Profile; app_version?: string | null }>
-      entries.forEach((entry) => {
-        if (entry.user_id) {
-          userIds.add(entry.user_id)
-        }
-      })
+      const entries = timeEntries || []
 
       // IMPORTANT: Always use currentSelectedUserIds from ref to ensure we use the latest state
       // If filtering by specific users, only include those users
@@ -367,53 +383,10 @@ export default function Attendance({ user }: AttendanceProps) {
               return sum + (entry.duration || 0)
             }, 0)
 
-            // Convert duration to hours
-            const hoursWorked = totalDuration / 3600
+            const status = getAttendanceStatus(totalDuration / 3600)
 
-            // Determine status based on hours worked
-            // 8+ hours = Present, 4-8 hours = Half Day, <4 hours = Absent
-            let status: 'present' | 'half_day' | 'absent' = 'absent'
-            if (hoursWorked >= 8) {
-              status = 'present'
-            } else if (hoursWorked >= 4) {
-              status = 'half_day'
-            } else {
-              // Less than 4 hours = Absent
-              status = 'absent'
-            }
-
-            // Process time entries with project/task and activity info
-            // Note: In Select All mode, nested data may not be fetched to avoid timeout
-            const processedEntries = dayEntries.map((entry: any) => {
-              // Extract project and task information (may be missing in Select All mode)
-              const projects = (entry.project_time_entries || []).map((pte: any) => ({
-                project_id: pte.project_id,
-                project_name: pte.projects?.name || 'No Project',
-                task_name: pte.projects?.tasks?.name || null,
-              })).filter((p: any) => p.project_id !== null && p.project_name !== 'No Project')
-
-              // Calculate activity totals from screenshots (may be missing in Select All mode)
-              let totalKeystrokes = 0
-              let totalMouseMovements = 0
-              let productivityScore = 0
-              let activityCount = 0
-
-              if (entry.screenshots && Array.isArray(entry.screenshots)) {
-                entry.screenshots.forEach((screenshot: any) => {
-                  if (screenshot?.activity_logs && Array.isArray(screenshot.activity_logs)) {
-                    screenshot.activity_logs.forEach((log: any) => {
-                      totalKeystrokes += log.keystrokes || 0
-                      totalMouseMovements += log.mouse_movements || 0
-                      productivityScore += log.productivity_score || 0
-                      activityCount++
-                    })
-                  }
-                })
-              }
-
-              // Calculate average productivity score
-              const avgProductivityScore = activityCount > 0 ? productivityScore / activityCount : 0
-
+            const processedEntries = dayEntries.map((entry) => {
+              const projects = mapEntryProjects(entry)
               return {
                 id: entry.id,
                 start_time: entry.start_time,
@@ -421,22 +394,11 @@ export default function Attendance({ user }: AttendanceProps) {
                 duration: entry.duration,
                 description: entry.description,
                 app_version: entry.app_version || null,
-                projects: projects.length > 0 ? projects : [],
-                activity: {
-                  totalKeystrokes,
-                  totalMouseMovements,
-                  productivityScore: Math.round(avgProductivityScore * 10) / 10,
-                },
+                projects,
               }
             })
 
-            // Get the most common app_version from all entries for this day
-            const appVersions = processedEntries.map((e) => e.app_version).filter(Boolean) as string[]
-            const mostCommonVersion = appVersions.length > 0 
-              ? appVersions.reduce((a: string, b: string, _: number, arr: string[]) => 
-                  arr.filter((v: string) => v === a).length >= arr.filter((v: string) => v === b).length ? a : b
-                )
-              : null
+            const mostCommonVersion = getMostCommonVersion(processedEntries.map((e) => e.app_version))
 
             attendanceMap.set(`${userId}-${dateStr}`, {
               id: `${userId}-${dateStr}`,
@@ -474,184 +436,92 @@ export default function Attendance({ user }: AttendanceProps) {
         return new Date(b.date).getTime() - new Date(a.date).getTime()
       })
 
-      // Fetch approved leave applications from HRMS database
       try {
-        // Get all user emails from both attendance records and team members
-        // This ensures we fetch leave data for all visible users, not just those with time entries
         const userEmails = new Set<string>()
-        
-        // Add emails from attendance records
-        attendanceRecords.forEach(record => {
-          if (record.profile?.email) {
-            userEmails.add(record.profile.email.toLowerCase())
-          }
-        })
-        
-        // Add emails from team members (all users the current user can see)
-        teamMembers.forEach(member => {
-          if (member.email) {
-            userEmails.add(member.email.toLowerCase())
-          }
-        })
+        for (const record of attendanceRecords) {
+          if (record.profile?.email) userEmails.add(record.profile.email.toLowerCase())
+        }
+        for (const member of teamMembers) {
+          if (member.email) userEmails.add(member.email.toLowerCase())
+        }
 
         if (userEmails.size > 0) {
-          // Also try case-insensitive matching by fetching all users and matching manually
-          // This handles cases where email casing might differ
-          const { data: allHrmsUsers } = await hrmsSupabase
-            .from('users')
-            .select('id, email')
+          const { data: allHrmsUsers } = await hrmsSupabase.from('users').select('id, email')
 
-          // Create case-insensitive email mapping
-          const hrmsUsersMap = new Map<string, { id: string; email: string }>()
-          if (allHrmsUsers) {
-            allHrmsUsers.forEach(hrmsUser => {
-              if (hrmsUser.email) {
-                const emailLower = hrmsUser.email.toLowerCase()
-                // Check if this email matches any of our user emails
-                if (userEmails.has(emailLower)) {
-                  hrmsUsersMap.set(emailLower, hrmsUser)
-                }
-              }
-            })
+          const hrmsUsersById = new Map<string, { id: string; email: string }>()
+          for (const hrmsUser of allHrmsUsers || []) {
+            if (!hrmsUser.email) continue
+            const emailLower = hrmsUser.email.toLowerCase()
+            if (userEmails.has(emailLower)) hrmsUsersById.set(hrmsUser.id, hrmsUser)
           }
 
-          if (hrmsUsersMap.size > 0) {
-            // Create email to HRMS user_id mapping
-            const emailToHrmsUserId = new Map<string, string>()
-            const hrmsUserIds = new Set<string>()
-            hrmsUsersMap.forEach((hrmsUser, emailLower) => {
-              if (hrmsUser.id) {
-                emailToHrmsUserId.set(emailLower, hrmsUser.id)
-                hrmsUserIds.add(hrmsUser.id)
-              }
-            })
-
-            // Fetch approved leave applications for the date range and matching users
+          if (hrmsUsersById.size > 0) {
             const { data: leaveApplications } = await hrmsSupabase
               .from('leave_applications')
-              .select('user_id, start_date, end_date, status')
+              .select('user_id, start_date, end_date')
               .eq('status', 'approved')
-              .in('user_id', Array.from(hrmsUserIds))
+              .in('user_id', [...hrmsUsersById.keys()])
               .lte('start_date', endDate)
               .gte('end_date', startDate)
 
-            if (leaveApplications && leaveApplications.length > 0) {
-              console.log('Found leave applications:', leaveApplications.length)
-              
-              // Create a case-insensitive map of email -> tracker user_id for quick lookup
+            if (leaveApplications?.length) {
               const emailToTrackerUserId = new Map<string, string>()
-              teamMembers.forEach(member => {
-                if (member.email && member.id) {
-                  emailToTrackerUserId.set(member.email.toLowerCase(), member.id)
-                }
-              })
-              
-              // Also add from attendance records (in case profile is missing from teamMembers)
-              attendanceRecords.forEach(record => {
+              for (const member of teamMembers) {
+                if (member.email && member.id) emailToTrackerUserId.set(member.email.toLowerCase(), member.id)
+              }
+              for (const record of attendanceRecords) {
                 if (record.profile?.email && record.user_id) {
                   emailToTrackerUserId.set(record.profile.email.toLowerCase(), record.user_id)
                 }
-              })
+              }
 
-              console.log('Email mappings - Team members:', Array.from(emailToTrackerUserId.keys()))
-              console.log('HRMS users found:', Array.from(hrmsUsersMap.keys()))
-
-              // Create a map of user_id -> dates on leave
               const userLeaveDates = new Map<string, Set<string>>()
+              for (const leave of leaveApplications) {
+                const hrmsUser = hrmsUsersById.get(leave.user_id)
+                if (!hrmsUser?.email) continue
+                const trackerUserId = emailToTrackerUserId.get(hrmsUser.email.toLowerCase())
+                if (!trackerUserId) continue
 
-              leaveApplications.forEach(leave => {
-                const hrmsUserId = leave.user_id
-                // Find the HRMS user by ID
-                const hrmsUser = Array.from(hrmsUsersMap.values()).find(u => u.id === hrmsUserId)
-                
-                if (hrmsUser && hrmsUser.email) {
-                  // Find the tracker user_id by matching email (case-insensitive)
-                  const trackerUserId = emailToTrackerUserId.get(hrmsUser.email.toLowerCase())
-                  
-                  if (trackerUserId) {
-                    console.log(`Matched leave for ${hrmsUser.email} -> tracker user ${trackerUserId}, dates: ${leave.start_date} to ${leave.end_date}`)
-                    
-                    // Generate all dates in the leave range
-                    const leaveStart = parseISO(leave.start_date)
-                    const leaveEnd = parseISO(leave.end_date)
-                    const currentLeaveDate = new Date(leaveStart)
+                const dates = leaveDatesInRange(leave.start_date, leave.end_date, startDate, endDate)
+                if (!userLeaveDates.has(trackerUserId)) userLeaveDates.set(trackerUserId, new Set())
+                const leaveSet = userLeaveDates.get(trackerUserId)!
+                for (const dateStr of dates) leaveSet.add(dateStr)
+              }
 
-                    while (currentLeaveDate <= leaveEnd) {
-                      const dateStr = format(currentLeaveDate, 'yyyy-MM-dd')
-                      
-                      // Only include dates within the selected date range
-                      if (dateStr >= startDate && dateStr <= endDate) {
-                        if (!userLeaveDates.has(trackerUserId)) {
-                          userLeaveDates.set(trackerUserId, new Set())
-                        }
-                        userLeaveDates.get(trackerUserId)!.add(dateStr)
-                      }
+              const recordKey = (userId: string, date: string) => `${userId}-${date}`
+              const existingKeys = new Set(attendanceRecords.map((r) => recordKey(r.user_id, r.date)))
 
-                      currentLeaveDate.setDate(currentLeaveDate.getDate() + 1)
-                    }
-                  } else {
-                    console.warn(`Could not match HRMS user ${hrmsUser.email} to any tracker user`)
-                  }
-                }
-              })
-
-              console.log('User leave dates mapped:', Array.from(userLeaveDates.entries()).map(([id, dates]) => ({ userId: id, dates: Array.from(dates) })))
-
-              // Update existing attendance records to show "on_leave" status
-              attendanceRecords = attendanceRecords.map(record => {
-                const leaveDates = userLeaveDates.get(record.user_id)
-                if (leaveDates && leaveDates.has(record.date)) {
-                  return {
-                    ...record,
-                    status: 'on_leave' as const,
-                  }
-                }
-                return record
-              })
-
-              // Create attendance records for leave dates that don't have time entries
-              // This ensures users on leave show up even if they have no time entries
-              userLeaveDates.forEach((leaveDateSet, trackerUserId) => {
-                const userProfile = teamMembers.find(m => m.id === trackerUserId)
-                if (userProfile) {
-                  leaveDateSet.forEach(dateStr => {
-                    // Check if record already exists
-                    const existingRecord = attendanceRecords.find(
-                      r => r.user_id === trackerUserId && r.date === dateStr
-                    )
-                    
-                    if (!existingRecord) {
-                      // Create a new attendance record for this leave date
-                      attendanceRecords.push({
-                        id: `${trackerUserId}-${dateStr}`,
-                        user_id: trackerUserId,
-                        date: dateStr,
-                        clock_in_time: null,
-                        clock_out_time: null,
-                        status: 'on_leave',
-                        duration: 0,
-                        profile: userProfile,
-                      })
-                    }
-                  })
-                }
-              })
-
-              // Re-sort attendance records after adding leave records
-              attendanceRecords = attendanceRecords.sort((a, b) => {
-                return new Date(b.date).getTime() - new Date(a.date).getTime()
-              })
+              attendanceRecords = [
+                ...attendanceRecords.map((record) => {
+                  const leaveDates = userLeaveDates.get(record.user_id)
+                  return leaveDates?.has(record.date) ? { ...record, status: 'on_leave' as const } : record
+                }),
+                ...[...userLeaveDates.entries()].flatMap(([trackerUserId, leaveDateSet]) => {
+                  const userProfile = teamMembers.find((m) => m.id === trackerUserId)
+                  if (!userProfile) return []
+                  return [...leaveDateSet]
+                    .filter((dateStr) => !existingKeys.has(recordKey(trackerUserId, dateStr)))
+                    .map((dateStr) => ({
+                      id: recordKey(trackerUserId, dateStr),
+                      user_id: trackerUserId,
+                      date: dateStr,
+                      clock_in_time: null,
+                      clock_out_time: null,
+                      status: 'on_leave' as const,
+                      duration: 0,
+                      profile: userProfile,
+                    }))
+                }),
+              ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
             }
           }
         }
       } catch (error) {
         console.error('Error fetching leave applications from HRMS:', error)
-        // Continue with attendance records even if leave fetch fails
       }
 
       if (requestId !== fetchRequestIdRef.current) return
 
-      console.log('Calculated attendance records:', attendanceRecords.length)
       setRecords(attendanceRecords)
     } catch (err: any) {
       if (requestId !== fetchRequestIdRef.current) return
