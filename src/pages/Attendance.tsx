@@ -91,6 +91,61 @@ function leaveDatesInRange(leaveStart: string, leaveEnd: string, rangeStart: str
   return dates
 }
 
+type HrmsLeaveApplication = {
+  user_id: string
+  start_date: string
+  end_date: string
+  leave_type_id?: string | null
+  type_id?: string | null
+  leave_types?: { name: string } | { name: string }[] | null
+}
+
+function resolveLeaveTypeName(
+  leave: HrmsLeaveApplication,
+  leaveTypeById: Map<string, string>,
+): string | null {
+  const nested = leave.leave_types
+  if (nested) {
+    const name = Array.isArray(nested) ? nested[0]?.name : nested.name
+    if (name) return name
+  }
+  const typeId = leave.leave_type_id || leave.type_id
+  return typeId ? leaveTypeById.get(typeId) ?? null : null
+}
+
+function formatAttendanceStatus(record: AttendanceRecord | undefined, date: string): string {
+  const dateObj = parseISO(date)
+  const dayOfWeek = format(dateObj, 'EEEE')
+  const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
+
+  if (!record) {
+    return isWeekend ? 'Weekend' : '—'
+  }
+
+  const hoursWorked = (record.duration || 0) / 3600
+
+  if (record.status === 'on_leave') {
+    return record.leave_type ? `On Leave (${record.leave_type})` : 'On Leave'
+  }
+
+  if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
+    return 'Weekend'
+  }
+
+  switch (record.status) {
+    case 'present':
+      return 'Present'
+    case 'half_day':
+      return 'Half Day'
+    case 'late':
+      return 'Late'
+    case 'absent':
+      return 'Absent'
+    default:
+      return record.status
+  }
+}
+
 interface AttendanceProps {
   user: Profile
 }
@@ -102,6 +157,7 @@ interface AttendanceRecord {
   clock_in_time: string | null
   clock_out_time: string | null
   status: 'present' | 'half_day' | 'late' | 'absent' | 'on_leave'
+  leave_type?: string | null
   duration: number // in seconds
   profile?: Profile
   app_version?: string | null // Tracker app version
@@ -456,13 +512,30 @@ export default function Attendance({ user }: AttendanceProps) {
           }
 
           if (hrmsUsersById.size > 0) {
-            const { data: leaveApplications } = await hrmsSupabase
-              .from('leave_applications')
-              .select('user_id, start_date, end_date')
-              .eq('status', 'approved')
-              .in('user_id', [...hrmsUsersById.keys()])
-              .lte('start_date', endDate)
-              .gte('end_date', startDate)
+            const [{ data: leaveTypes }, leaveApplicationsResult] = await Promise.all([
+              hrmsSupabase.from('leave_types').select('id, name'),
+              hrmsSupabase
+                .from('leave_applications')
+                .select('user_id, start_date, end_date, leave_type_id, leave_types(name)')
+                .eq('status', 'approved')
+                .in('user_id', [...hrmsUsersById.keys()])
+                .lte('start_date', endDate)
+                .gte('end_date', startDate),
+            ])
+
+            let leaveApplications = leaveApplicationsResult.data as HrmsLeaveApplication[] | null
+            if (leaveApplicationsResult.error) {
+              const fallbackResult = await hrmsSupabase
+                .from('leave_applications')
+                .select('user_id, start_date, end_date, type_id, leave_types(name)')
+                .eq('status', 'approved')
+                .in('user_id', [...hrmsUsersById.keys()])
+                .lte('start_date', endDate)
+                .gte('end_date', startDate)
+              leaveApplications = fallbackResult.data as HrmsLeaveApplication[] | null
+            }
+
+            const leaveTypeById = new Map((leaveTypes || []).map((type) => [type.id, type.name]))
 
             if (leaveApplications?.length) {
               const emailToTrackerUserId = new Map<string, string>()
@@ -475,17 +548,20 @@ export default function Attendance({ user }: AttendanceProps) {
                 }
               }
 
-              const userLeaveDates = new Map<string, Set<string>>()
+              const userLeaveByDate = new Map<string, Map<string, string>>()
               for (const leave of leaveApplications) {
                 const hrmsUser = hrmsUsersById.get(leave.user_id)
                 if (!hrmsUser?.email) continue
                 const trackerUserId = emailToTrackerUserId.get(hrmsUser.email.toLowerCase())
                 if (!trackerUserId) continue
 
+                const leaveTypeName = resolveLeaveTypeName(leave, leaveTypeById)
                 const dates = leaveDatesInRange(leave.start_date, leave.end_date, startDate, endDate)
-                if (!userLeaveDates.has(trackerUserId)) userLeaveDates.set(trackerUserId, new Set())
-                const leaveSet = userLeaveDates.get(trackerUserId)!
-                for (const dateStr of dates) leaveSet.add(dateStr)
+                if (!userLeaveByDate.has(trackerUserId)) userLeaveByDate.set(trackerUserId, new Map())
+                const leaveByDate = userLeaveByDate.get(trackerUserId)!
+                for (const dateStr of dates) {
+                  leaveByDate.set(dateStr, leaveTypeName || 'Leave')
+                }
               }
 
               const recordKey = (userId: string, date: string) => `${userId}-${date}`
@@ -493,21 +569,24 @@ export default function Attendance({ user }: AttendanceProps) {
 
               attendanceRecords = [
                 ...attendanceRecords.map((record) => {
-                  const leaveDates = userLeaveDates.get(record.user_id)
-                  return leaveDates?.has(record.date) ? { ...record, status: 'on_leave' as const } : record
+                  const leaveType = userLeaveByDate.get(record.user_id)?.get(record.date)
+                  return leaveType !== undefined
+                    ? { ...record, status: 'on_leave' as const, leave_type: leaveType }
+                    : record
                 }),
-                ...[...userLeaveDates.entries()].flatMap(([trackerUserId, leaveDateSet]) => {
+                ...[...userLeaveByDate.entries()].flatMap(([trackerUserId, leaveDateMap]) => {
                   const userProfile = teamMembers.find((m) => m.id === trackerUserId)
                   if (!userProfile) return []
-                  return [...leaveDateSet]
-                    .filter((dateStr) => !existingKeys.has(recordKey(trackerUserId, dateStr)))
-                    .map((dateStr) => ({
+                  return [...leaveDateMap.entries()]
+                    .filter(([dateStr]) => !existingKeys.has(recordKey(trackerUserId, dateStr)))
+                    .map(([dateStr, leaveType]) => ({
                       id: recordKey(trackerUserId, dateStr),
                       user_id: trackerUserId,
                       date: dateStr,
                       clock_in_time: null,
                       clock_out_time: null,
                       status: 'on_leave' as const,
+                      leave_type: leaveType,
                       duration: 0,
                       profile: userProfile,
                     }))
@@ -809,12 +888,7 @@ export default function Attendance({ user }: AttendanceProps) {
         
         if (record) {
           const hoursWorked = (record.duration || 0) / 3600
-          let status = record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' ')
-          
-          // If it's weekend and status is absent with no hours, show "Weekend" instead
-          if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
-            status = 'Weekend'
-          }
+          const status = formatAttendanceStatus(record, date)
           
           // Add Status
           row.push(status)
@@ -874,316 +948,209 @@ export default function Attendance({ user }: AttendanceProps) {
   }
 
   const handleExportPDF = () => {
-    // Generate all dates in the range
     const allDates: string[] = []
     const currentDate = new Date(parseISO(startDate))
     const endDateObj = parseISO(endDate)
-    
+
     while (currentDate <= endDateObj) {
       allDates.push(format(currentDate, 'yyyy-MM-dd'))
       currentDate.setDate(currentDate.getDate() + 1)
     }
-    
-    // Group dates by week (Monday-Sunday)
+
     const datesByWeek = new Map<string, string[]>()
-    allDates.forEach(date => {
+    allDates.forEach((date) => {
       const weekKey = getWeekKey(date)
       if (!datesByWeek.has(weekKey)) {
         datesByWeek.set(weekKey, [])
       }
       datesByWeek.get(weekKey)!.push(date)
     })
-    
-    // Group records by employee
+
     const employeeMap = new Map<string, {
       name: string
       records: Map<string, AttendanceRecord>
     }>()
-    
+
     filteredRecords.forEach((record) => {
       const employeeId = record.user_id
       const employeeName = record.profile?.full_name || 'Unknown'
-      
+
       if (!employeeMap.has(employeeId)) {
         employeeMap.set(employeeId, {
           name: employeeName,
-          records: new Map()
+          records: new Map(),
         })
       }
-      
+
       employeeMap.get(employeeId)!.records.set(record.date, record)
     })
-    
-    // Create PDF
-    const doc = new jsPDF('landscape', 'mm', 'a4')
-    
-    // Colors
-    const primaryColor: [number, number, number] = [41, 128, 185] // Blue
-    const headerColor: [number, number, number] = [52, 73, 94] // Dark gray
-    const orangeColor: [number, number, number] = [255, 152, 0] // Orange for < 7.30 hours
+
+    const doc = new jsPDF('portrait', 'mm', 'a4')
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const primaryColor: [number, number, number] = [41, 128, 185]
+    const headerColor: [number, number, number] = [52, 73, 94]
+    const orangeColor: [number, number, number] = [255, 152, 0]
     const lightGray: [number, number, number] = [236, 240, 241]
-    
-    // Add header with title and export info
-    doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2])
-    doc.rect(0, 0, doc.internal.pageSize.getWidth(), 30, 'F')
-    
-    doc.setTextColor(255, 255, 255)
-    doc.setFontSize(20)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Attendance Report', 15, 20)
-    
-    // Export date and time
-    const exportDateTime = new Date()
-    const exportDateStr = format(exportDateTime, 'MMMM d, yyyy')
-    const exportTimeStr = format(exportDateTime, 'hh:mm:ss a')
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'normal')
-    doc.text(`Exported on: ${exportDateStr} at ${exportTimeStr}`, doc.internal.pageSize.getWidth() - 15, 20, { align: 'right' })
-    
-    // Date range
-    const dateRangeStr = startDate === endDate
-      ? format(parseISO(startDate), 'MMMM d, yyyy')
-      : `${format(parseISO(startDate), 'MMMM d, yyyy')} - ${format(parseISO(endDate), 'MMMM d, yyyy')}`
-    doc.text(`Period: ${dateRangeStr}`, doc.internal.pageSize.getWidth() - 15, 25, { align: 'right' })
-    
-    // Prepare table data
-    const tableData: any[] = []
-    const tableHeaders: string[] = ['Employee Name']
-    
-    // Build headers with dates
-    allDates.forEach((date, index) => {
-      const dateObj = parseISO(date)
-      const dayName = format(dateObj, 'EEEE')
-      const dateStr = format(dateObj, 'd MMMM yyyy')
-      const header = `${dateStr} (${dayName})`
-      
-      tableHeaders.push(`${header} - Status`, `${header} - Duration`)
-      
-      // Add weekly total column after Sunday (end of week) or at the end
-      const dayOfWeek = format(dateObj, 'EEEE')
-      if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
-        // Find Monday and Sunday of this week
-        const weekKey = getWeekKey(date)
-        const weekDates = datesByWeek.get(weekKey) || []
-        if (weekDates.length > 0) {
-          const weekStart = weekDates[0] // Monday
-          const weekEnd = weekDates[weekDates.length - 1] // Sunday (or last day of week)
-          const weekStartFormatted = format(parseISO(weekStart), 'MMM d')
-          const weekEndFormatted = format(parseISO(weekEnd), 'MMM d, yyyy')
-          tableHeaders.push(`Week Total\n(${weekStartFormatted} - ${weekEndFormatted})`)
-        }
-      }
-    })
-    
-    // Build table rows
     const employees = Array.from(employeeMap.values()).sort((a, b) => a.name.localeCompare(b.name))
-    
-    employees.forEach((employee) => {
-      const row: any[] = [employee.name]
-      const weekTotals = new Map<string, number>() // Track totals by week key
-      
+
+    const drawReportHeader = (yOffset = 0) => {
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2])
+      doc.rect(0, yOffset, pageWidth, 28, 'F')
+
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(18)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Attendance Report', 15, yOffset + 12)
+
+      const exportDateTime = new Date()
+      const exportDateStr = format(exportDateTime, 'MMMM d, yyyy')
+      const exportTimeStr = format(exportDateTime, 'hh:mm:ss a')
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.text(`Exported on: ${exportDateStr} at ${exportTimeStr}`, pageWidth - 15, yOffset + 10, { align: 'right' })
+
+      const dateRangeStr = startDate === endDate
+        ? format(parseISO(startDate), 'MMMM d, yyyy')
+        : `${format(parseISO(startDate), 'MMMM d, yyyy')} - ${format(parseISO(endDate), 'MMMM d, yyyy')}`
+      doc.text(`Period: ${dateRangeStr}`, pageWidth - 15, yOffset + 16, { align: 'right' })
+      doc.text(`${employees.length} employee${employees.length === 1 ? '' : 's'}`, pageWidth - 15, yOffset + 22, { align: 'right' })
+    }
+
+    const addPageFooter = () => {
+      const pageCount = doc.getNumberOfPages()
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i)
+        doc.setFontSize(8)
+        doc.setTextColor(128, 128, 128)
+        doc.text(
+          `Page ${i} of ${pageCount} | TimeFlow Attendance Report`,
+          pageWidth / 2,
+          pageHeight - 10,
+          { align: 'center' },
+        )
+      }
+    }
+
+    drawReportHeader()
+
+    let startY = 36
+
+    employees.forEach((employee, employeeIndex) => {
+      if (employeeIndex > 0) {
+        doc.addPage()
+        startY = 20
+      }
+
+      doc.setTextColor(44, 62, 80)
+      doc.setFontSize(13)
+      doc.setFont('helvetica', 'bold')
+      doc.text(employee.name, 15, startY)
+      startY += 7
+
+      const tableBody: any[] = []
+      const weekTotals = new Map<string, number>()
+
       allDates.forEach((date, index) => {
         const record = employee.records.get(date)
         const dateObj = parseISO(date)
-        const dayOfWeek = format(dateObj, 'EEEE')
-        const isWeekend = dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday'
         const weekKey = getWeekKey(date)
-        
-        if (record) {
-          const hoursWorked = (record.duration || 0) / 3600
-          let status = record.status.charAt(0).toUpperCase() + record.status.slice(1).replace('_', ' ')
-          
-          if (isWeekend && record.status === 'absent' && hoursWorked === 0) {
-            status = 'Weekend'
-          }
-          
-          row.push(status)
-          
-          const durationStr = hoursWorked > 0 ? `${hoursWorked.toFixed(2)}h` : '—'
-          row.push(durationStr)
-          
-          // Add to week total
-          if (hoursWorked > 0) {
-            if (!weekTotals.has(weekKey)) {
-              weekTotals.set(weekKey, 0)
-            }
-            weekTotals.set(weekKey, weekTotals.get(weekKey)! + hoursWorked)
-          }
-        } else {
-          if (isWeekend) {
-            row.push('Weekend', '—')
-          } else {
-            row.push('—', '—')
-          }
+        const dayOfWeek = format(dateObj, 'EEEE')
+        const hoursWorked = record ? (record.duration || 0) / 3600 : 0
+
+        if (hoursWorked > 0) {
+          weekTotals.set(weekKey, (weekTotals.get(weekKey) || 0) + hoursWorked)
         }
-        
-        // Add weekly total column after Sunday (end of week) or at the end
+
+        tableBody.push([
+          format(dateObj, 'd MMM yyyy'),
+          dayOfWeek,
+          formatAttendanceStatus(record, date),
+          hoursWorked > 0 ? `${hoursWorked.toFixed(2)}h` : '—',
+        ])
+
         if (dayOfWeek === 'Sunday' || index === allDates.length - 1) {
+          const weekDates = datesByWeek.get(weekKey) || []
+          const weekStart = weekDates[0]
+          const weekEnd = weekDates[weekDates.length - 1]
           const weekTotal = weekTotals.get(weekKey) || 0
-          row.push(weekTotal > 0 ? `${weekTotal.toFixed(2)}h` : '—')
+          const weekLabel = weekStart && weekEnd
+            ? `Week Total (${format(parseISO(weekStart), 'MMM d')} - ${format(parseISO(weekEnd), 'MMM d, yyyy')})`
+            : 'Week Total'
+
+          tableBody.push([
+            { content: weekLabel, colSpan: 3, styles: { fontStyle: 'bold', fillColor: lightGray, textColor: [44, 62, 80] } },
+            {
+              content: weekTotal > 0 ? `${weekTotal.toFixed(2)}h` : '—',
+              styles: {
+                fontStyle: 'bold',
+                fillColor: weekTotal > 0 && weekTotal < 40 ? [220, 53, 69] : lightGray,
+                textColor: weekTotal > 0 && weekTotal < 40 ? [255, 255, 255] : [44, 62, 80],
+                halign: 'center',
+              },
+            },
+          ])
         }
       })
-      
-      tableData.push(row)
-    })
-    
-    // Add table with autoTable
-    let startY = 40
-    const pageWidth = doc.internal.pageSize.getWidth()
-    const availableWidth = pageWidth - 20 // 10mm margin on each side
-    
-    // Calculate column widths dynamically
-    const numDateColumns = allDates.length * 2 // Status + Duration for each date
-    
-    // Employee name gets fixed width, rest is distributed
-    const employeeNameWidth = 30
-    const remainingWidth = availableWidth - employeeNameWidth
-    
-    // Calculate how many week total columns we have (count Sundays and last day)
-    let weekTotalCount = 0
-    for (let i = 0; i < allDates.length; i++) {
-      const dateObj = parseISO(allDates[i])
-      const dayOfWeek = format(dateObj, 'EEEE')
-      if (dayOfWeek === 'Sunday' || i === allDates.length - 1) {
-        weekTotalCount++
-      }
-    }
-    
-    // Distribute width: 85% for date columns, 15% for week totals
-    const dateColumnsTotal = numDateColumns
-    const weekTotalColumnsTotal = weekTotalCount
-    const dateColumnWidth = (remainingWidth * 0.85) / dateColumnsTotal
-    const weekTotalWidth = weekTotalColumnsTotal > 0 ? (remainingWidth * 0.15) / weekTotalColumnsTotal : 20
-    
-    // Build column styles
-    const columnStyles: any = {
-      0: { cellWidth: employeeNameWidth, fontStyle: 'bold', fontSize: 6 },
-    }
-    
-    // Track which columns are week totals and which are duration columns
-    // Must match the exact header structure
-    const weekTotalColumnIndices = new Set<number>()
-    const durationColumnIndices = new Map<number, number>() // Map column index to date index
-    let colIndex = 1
-    
-    for (let dateIndex = 0; dateIndex < allDates.length; dateIndex++) {
-      const date = allDates[dateIndex]
-      const dateObj = parseISO(date)
-      const dayOfWeek = format(dateObj, 'EEEE')
-      
-      // Status column
-      columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
-      colIndex++
-      
-      // Duration column - track this as a duration column
-      durationColumnIndices.set(colIndex, dateIndex)
-      columnStyles[colIndex] = { cellWidth: dateColumnWidth, fontSize: 6 }
-      colIndex++
-      
-      // Add week total column after Sunday (end of week) or at the end
-      if (dayOfWeek === 'Sunday' || dateIndex === allDates.length - 1) {
-        weekTotalColumnIndices.add(colIndex)
-        columnStyles[colIndex] = { cellWidth: weekTotalWidth, fontSize: 6, fontStyle: 'bold' }
-        colIndex++
-      }
-    }
-    
-    autoTable(doc, {
-      head: [tableHeaders],
-      body: tableData,
-      startY: startY,
-      theme: 'striped',
-      headStyles: {
-        fillColor: [headerColor[0], headerColor[1], headerColor[2]],
-        textColor: 255,
-        fontStyle: 'bold',
-        fontSize: 6,
-        halign: 'center',
-        valign: 'middle',
-        cellPadding: 1,
-      },
-      bodyStyles: {
-        fontSize: 6,
-        textColor: [44, 62, 80],
-        cellPadding: 1,
-      },
-      alternateRowStyles: {
-        fillColor: [lightGray[0], lightGray[1], lightGray[2]],
-      },
-      columnStyles: columnStyles,
-      didParseCell: (data: any) => {
-        const colIndex = data.column.index
-        const cellValue = data.cell.text[0]
-        
-        // First check if this is a week total column - only these should be red
-        if (weekTotalColumnIndices.has(colIndex)) {
-          if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
-            const hours = parseFloat(cellValue.replace('h', ''))
-            if (!isNaN(hours) && hours < 40) {
-              // Highlight week totals < 40 hours in red
-              data.cell.styles.fillColor = [220, 53, 69] // Red color
-              data.cell.styles.textColor = [255, 255, 255]
-              data.cell.styles.fontStyle = 'bold'
-            }
+
+      autoTable(doc, {
+        head: [['Date', 'Day', 'Status', 'Hours Worked']],
+        body: tableBody,
+        startY,
+        theme: 'striped',
+        headStyles: {
+          fillColor: [headerColor[0], headerColor[1], headerColor[2]],
+          textColor: 255,
+          fontStyle: 'bold',
+          fontSize: 9,
+          halign: 'center',
+        },
+        bodyStyles: {
+          fontSize: 9,
+          textColor: [44, 62, 80],
+          cellPadding: 2,
+        },
+        alternateRowStyles: {
+          fillColor: [lightGray[0], lightGray[1], lightGray[2]],
+        },
+        columnStyles: {
+          0: { cellWidth: 32 },
+          1: { cellWidth: 28 },
+          2: { cellWidth: 78 },
+          3: { cellWidth: 28, halign: 'center' },
+        },
+        didParseCell: (data: any) => {
+          if (data.section !== 'body' || data.column.index !== 3) return
+
+          const cellValue = data.cell.text[0]
+          if (!cellValue || cellValue === '—' || typeof cellValue !== 'string' || !cellValue.includes('h')) return
+
+          const hours = parseFloat(cellValue.replace('h', ''))
+          if (isNaN(hours) || hours >= 7.30) return
+
+          const row = tableBody[data.row.index]
+          if (!Array.isArray(row) || row.length !== 4 || typeof row[1] !== 'string') return
+
+          const isWeekday = row[1] !== 'Saturday' && row[1] !== 'Sunday'
+          if (isWeekday) {
+            data.cell.styles.fillColor = [orangeColor[0], orangeColor[1], orangeColor[2]]
+            data.cell.styles.textColor = [255, 255, 255]
+            data.cell.styles.fontStyle = 'bold'
           }
-          // Return early - don't process week total columns as duration columns
-          return
-        }
-        
-        // Check if this is a duration cell using our tracked duration column indices
-        if (durationColumnIndices.has(colIndex)) {
-          if (cellValue && cellValue !== '—' && typeof cellValue === 'string' && cellValue.includes('h')) {
-            const hours = parseFloat(cellValue.replace('h', ''))
-            
-            // Only process if hours < 7.30 (entries >= 7.5 should not be marked)
-            if (!isNaN(hours) && hours < 7.30) {
-              // Get the date index from our map
-              const dateIndex = durationColumnIndices.get(colIndex)!
-              if (dateIndex >= 0 && dateIndex < allDates.length) {
-                const date = allDates[dateIndex]
-                const dateObj = parseISO(date)
-                const dayOfWeek = format(dateObj, 'EEEE')
-                const isWeekday = dayOfWeek !== 'Saturday' && dayOfWeek !== 'Sunday'
-                
-                // Only highlight weekdays (Monday-Friday) with < 7.30 hours in orange
-                // Entries >= 7.5 hours will not be marked (condition already checked above)
-                if (isWeekday) {
-                  data.cell.styles.fillColor = [orangeColor[0], orangeColor[1], orangeColor[2]]
-                  data.cell.styles.textColor = [255, 255, 255]
-                  data.cell.styles.fontStyle = 'bold'
-                }
-              }
-            }
-            // If hours >= 7.5, do nothing - no highlighting
-          }
-        }
-      },
-      margin: { top: startY, left: 10, right: 10, bottom: 15 },
-      styles: {
-        overflow: 'linebreak',
-        cellWidth: 'auto',
-        lineWidth: 0.1,
-      },
-      tableWidth: 'wrap',
-      showHead: 'everyPage',
-      showFoot: 'never',
+        },
+        margin: { top: 15, left: 15, right: 15, bottom: 15 },
+        styles: {
+          overflow: 'linebreak',
+          lineWidth: 0.1,
+        },
+        showHead: 'everyPage',
+      })
+
+      startY = (doc as any).lastAutoTable.finalY + 12
     })
-    
-    // Add footer on each page
-    const pageCount = doc.getNumberOfPages()
-    for (let i = 1; i <= pageCount; i++) {
-      doc.setPage(i)
-      doc.setFontSize(8)
-      doc.setTextColor(128, 128, 128)
-      doc.text(
-        `Page ${i} of ${pageCount} | TimeFlow Attendance Report`,
-        doc.internal.pageSize.getWidth() / 2,
-        doc.internal.pageSize.getHeight() - 10,
-        { align: 'center' }
-      )
-    }
-    
-    // Save PDF
+
+    addPageFooter()
+
     const filename = `attendance-report_${format(parseISO(startDate), 'yyyy-MM-dd')}_${format(parseISO(endDate), 'yyyy-MM-dd')}.pdf`
     doc.save(filename)
   }
@@ -1767,7 +1734,7 @@ export default function Attendance({ user }: AttendanceProps) {
                               return (
                                 <span className="inline-flex items-center space-x-1 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-400 rounded-full text-sm font-medium">
                                   <Calendar className="w-4 h-4" />
-                                  <span>On Leave</span>
+                                  <span>{record.leave_type ? `On Leave (${record.leave_type})` : 'On Leave'}</span>
                                 </span>
                               )
                             } else {
