@@ -48,19 +48,11 @@ const SCREENSHOT_STORAGE_BASE_URL = 'https://timeflowstorage.mechlintech.com'.re
 const QUERY_RETRY_ATTEMPTS = 3
 const QUERY_RETRY_DELAY_MS = 400
 const SCREENSHOTS_TIMEOUT_MSG = 'Query timed out loading screenshots. Please try again.'
-const SCREENSHOT_SELECT = 'id, storage_path, taken_at, time_entry_id, type, created_at'
-const TIME_ENTRY_SELECT = 'id, description, profile:profiles!time_entries_user_id_fkey(id, full_name)'
 const ACTIVITY_BATCH_SIZE = 100
 const PROJECT_BATCH_SIZE = 50
 const MAX_SCREENSHOTS = 500
 
 type SupabaseError = { code?: string; message?: string }
-
-type ScreenshotEntryRow = {
-  id: string
-  description: string | null
-  profile?: { id: string; full_name: string | null }
-}
 
 type ScreenshotActivityRow = {
   screenshot_id: string
@@ -73,6 +65,28 @@ type ScreenshotProjectRow = {
   time_entry_id: string
   project_id: string
   projects?: { id: string; name: string; tasks?: { name: string } }
+}
+
+const SCREENSHOT_LIST_SELECT = 'id, storage_path, taken_at, time_entry_id, type, created_at, user_id'
+
+type TimeEntryEnrichmentRow = {
+  id: string
+  description: string | null
+  profile?: { id: string; full_name: string | null }
+}
+
+/** Row returned by get_screenshots_for_user_day RPC (single indexed DB round-trip). */
+type ScreenshotDayRow = {
+  id: string
+  storage_path: string
+  taken_at: string | null
+  time_entry_id: string
+  type: string
+  created_at: string | null
+  user_id: string
+  time_entry_description: string | null
+  profile_id: string
+  profile_full_name: string | null
 }
 
 const isQueryTimeoutError = (err: SupabaseError) =>
@@ -110,10 +124,6 @@ async function fetchInBatches<T>(
   return results
 }
 
-function dedupeById<T extends { id: string }>(items: T[]): T[] {
-  return [...new Map(items.map((item) => [item.id, item])).values()]
-}
-
 function groupByKey<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
   const map = new Map<string, T[]>()
   for (const item of items) {
@@ -130,7 +140,7 @@ function applyScreenshotTypeFilter<T extends { in: (col: string, vals: string[])
   typeFilter: 'all' | 'screenshot' | 'camera',
 ): T {
   if (typeFilter === 'camera') return query.in('type', ['camera', 'webcam'])
-  if (typeFilter === 'screenshot') return query.in('type', ['screen', 'screenshot', 'desktop'])
+  if (typeFilter === 'screenshot') return query.in('type', ['screen', 'screenshot', 'desktop', 'automatic'])
   if (typeFilter !== 'all') return query.eq('type', typeFilter)
   return query
 }
@@ -302,25 +312,160 @@ export default function Screenshots({ user }: ScreenshotsProps) {
     return url
   }
 
-  const fetchOverlappingEntries = (userId: string, dayStart: Date, dayEnd: Date) => {
-    let completed = supabase
-      .from('time_entries')
-      .select(TIME_ENTRY_SELECT)
-      .lte('start_time', dayEnd.toISOString())
-      .gte('end_time', dayStart.toISOString())
-    let running = supabase
-      .from('time_entries')
-      .select(TIME_ENTRY_SELECT)
-      .is('end_time', null)
-      .lte('start_time', dayEnd.toISOString())
-    if (userId) {
-      completed = completed.eq('user_id', userId)
-      running = running.eq('user_id', userId)
+  const mapScreenshotDayRows = (rows: ScreenshotDayRow[]): ScreenshotWithDetails[] =>
+    rows.map((row) => {
+      const finalPath = normalizeScreenshotStoragePath(row.storage_path, row.type)
+      return {
+        id: row.id,
+        storage_path: row.storage_path,
+        taken_at: row.taken_at,
+        time_entry_id: row.time_entry_id,
+        type: row.type,
+        created_at: row.created_at,
+        user_id: row.user_id,
+        imageUrl: buildScreenshotStorageServerUrl(finalPath) ?? '',
+        time_entry: {
+          id: row.time_entry_id,
+          description: row.time_entry_description,
+          profile: row.profile_id
+            ? { id: row.profile_id, full_name: row.profile_full_name }
+            : undefined,
+          project_time_entries: [],
+        },
+        activity_logs: [],
+      }
+    })
+
+  const fetchScreenshotsViaRpc = async (
+    dayStart: Date,
+    dayEnd: Date,
+  ): Promise<ScreenshotWithDetails[] | null> => {
+    const { data, error } = await supabase.rpc('get_screenshots_for_user_day', {
+      p_user_id: selectedUserId,
+      p_day_start: dayStart.toISOString(),
+      p_day_end: dayEnd.toISOString(),
+      p_type_filter: typeFilter,
+      p_limit: MAX_SCREENSHOTS,
+    })
+
+    if (error) {
+      if (error.code === 'PGRST202' || error.message?.includes('Could not find the function')) {
+        return null
+      }
+      throw error
     }
-    return Promise.all([
-      queryWithRetry<ScreenshotEntryRow[]>(() => completed),
-      queryWithRetry<ScreenshotEntryRow[]>(() => running),
-    ])
+
+    return mapScreenshotDayRows((data ?? []) as ScreenshotDayRow[])
+  }
+
+  const attachTimeEntryDetails = async (
+    shots: Screenshot[],
+    requestId: number,
+  ): Promise<ScreenshotWithDetails[]> => {
+    const entryIds = [...new Set(shots.map((s) => s.time_entry_id))]
+    let entryMap = new Map<string, TimeEntryEnrichmentRow>()
+
+    if (entryIds.length > 0) {
+      const entries = await queryWithRetry<TimeEntryEnrichmentRow[]>(() =>
+        supabase
+          .from('time_entries')
+          .select('id, description, profile:profiles!time_entries_user_id_fkey(id, full_name)')
+          .in('id', entryIds),
+      )
+      if (requestId !== fetchRequestIdRef.current) return []
+      entryMap = new Map(entries.map((e) => [e.id, e]))
+    }
+
+    return shots.map((shot) => {
+      const entry = entryMap.get(shot.time_entry_id)
+      const finalPath = normalizeScreenshotStoragePath(shot.storage_path, shot.type)
+      return {
+        ...shot,
+        imageUrl: buildScreenshotStorageServerUrl(finalPath) ?? '',
+        time_entry: entry
+          ? {
+              id: entry.id,
+              description: entry.description,
+              profile: entry.profile as Profile | undefined,
+              project_time_entries: [],
+            }
+          : undefined,
+        activity_logs: [],
+      }
+    })
+  }
+
+  const fetchScreenshotsDirect = async (
+    dayStart: Date,
+    dayEnd: Date,
+    requestId: number,
+  ): Promise<ScreenshotWithDetails[]> => {
+    const shots = await queryWithRetry<Screenshot[]>(() =>
+      applyScreenshotTypeFilter(
+        supabase
+          .from('screenshots')
+          .select(SCREENSHOT_LIST_SELECT)
+          .eq('user_id', selectedUserId)
+          .gte('taken_at', dayStart.toISOString())
+          .lte('taken_at', dayEnd.toISOString())
+          .order('taken_at', { ascending: false })
+          .limit(MAX_SCREENSHOTS),
+        typeFilter,
+      ),
+    )
+    if (requestId !== fetchRequestIdRef.current) return []
+    return attachTimeEntryDetails(shots, requestId)
+  }
+
+  const enrichScreenshotsInBackground = async (
+    baseShots: ScreenshotWithDetails[],
+    requestId: number,
+  ) => {
+    if (baseShots.length === 0) return
+
+    const screenshotIds = baseShots.map((shot) => shot.id)
+    const shotEntryIds = [...new Set(baseShots.map((shot) => shot.time_entry_id))]
+
+    try {
+      const [activityLogs, projectEntries] = await Promise.all([
+        fetchInBatches(screenshotIds, ACTIVITY_BATCH_SIZE, (batchIds) =>
+          queryWithRetry<ScreenshotActivityRow[]>(() =>
+            supabase
+              .from('activity_logs')
+              .select('screenshot_id, keystrokes, mouse_movements, productivity_score')
+              .in('screenshot_id', batchIds),
+          ),
+        ),
+        fetchInBatches(shotEntryIds, PROJECT_BATCH_SIZE, (batchIds) =>
+          queryWithRetry<ScreenshotProjectRow[]>(() =>
+            supabase
+              .from('project_time_entries')
+              .select('time_entry_id, project_id, projects(id, name, tasks(name))')
+              .in('time_entry_id', batchIds),
+          ),
+        ),
+      ])
+
+      if (requestId !== fetchRequestIdRef.current) return
+
+      const logsByScreenshot = groupByKey(activityLogs, (log) => log.screenshot_id)
+      const projectsByEntry = groupByKey(projectEntries, (pte) => pte.time_entry_id)
+
+      setScreenshots((prev) =>
+        prev.map((shot) => ({
+          ...shot,
+          activity_logs: logsByScreenshot.get(shot.id) ?? shot.activity_logs ?? [],
+          time_entry: shot.time_entry
+            ? {
+                ...shot.time_entry,
+                project_time_entries: projectsByEntry.get(shot.time_entry_id) ?? [],
+              }
+            : shot.time_entry,
+        })),
+      )
+    } catch (err) {
+      console.warn('Activity/project enrichment skipped (non-fatal):', err)
+    }
   }
 
   const fetchScreenshots = async () => {
@@ -333,82 +478,11 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       const dayStart = startOfDay(parseISO(selectedDate))
       const dayEnd = endOfDay(parseISO(selectedDate))
 
-      const [completedEntries, runningEntries] = await fetchOverlappingEntries(selectedUserId, dayStart, dayEnd)
-      if (requestId !== fetchRequestIdRef.current) return
-
-      const userEntries = dedupeById([...completedEntries, ...runningEntries])
-      const entryMap = new Map(userEntries.map((entry) => [entry.id, entry]))
-      const entryIds = userEntries.map((entry) => entry.id)
-
-      if (entryIds.length === 0) {
-        setScreenshots([])
-        return
-      }
-
-      const shots = await queryWithRetry<Screenshot[]>(() =>
-        applyScreenshotTypeFilter(
-          supabase
-            .from('screenshots')
-            .select(SCREENSHOT_SELECT)
-            .in('time_entry_id', entryIds)
-            .gte('taken_at', dayStart.toISOString())
-            .lte('taken_at', dayEnd.toISOString())
-            .order('taken_at', { ascending: false })
-            .limit(MAX_SCREENSHOTS),
-          typeFilter,
-        ),
-      )
+      let screenshotsWithUrls =
+        (await fetchScreenshotsViaRpc(dayStart, dayEnd)) ??
+        (await fetchScreenshotsDirect(dayStart, dayEnd, requestId))
 
       if (requestId !== fetchRequestIdRef.current) return
-
-      const screenshotIds = shots.map((shot) => shot.id)
-      const shotEntryIds = [...new Set(shots.map((shot) => shot.time_entry_id))]
-
-      const [activityLogs, projectEntries] = await Promise.all([
-        screenshotIds.length > 0
-          ? fetchInBatches(screenshotIds, ACTIVITY_BATCH_SIZE, (batchIds) =>
-              queryWithRetry<ScreenshotActivityRow[]>(() =>
-                supabase
-                  .from('activity_logs')
-                  .select('screenshot_id, keystrokes, mouse_movements, productivity_score')
-                  .in('screenshot_id', batchIds),
-              ),
-            )
-          : Promise.resolve([] as ScreenshotActivityRow[]),
-        shotEntryIds.length > 0
-          ? fetchInBatches(shotEntryIds, PROJECT_BATCH_SIZE, (batchIds) =>
-              queryWithRetry<ScreenshotProjectRow[]>(() =>
-                supabase
-                  .from('project_time_entries')
-                  .select('time_entry_id, project_id, projects(id, name, tasks(name))')
-                  .in('time_entry_id', batchIds),
-              ),
-            )
-          : Promise.resolve([] as ScreenshotProjectRow[]),
-      ])
-
-      if (requestId !== fetchRequestIdRef.current) return
-
-      const logsByScreenshot = groupByKey(activityLogs, (log) => log.screenshot_id)
-      const projectsByEntry = groupByKey(projectEntries, (pte) => pte.time_entry_id)
-
-      const screenshotsWithUrls: ScreenshotWithDetails[] = shots.map((shot) => {
-        const entry = entryMap.get(shot.time_entry_id)
-        const finalPath = normalizeScreenshotStoragePath(shot.storage_path, shot.type)
-        return {
-          ...shot,
-          imageUrl: buildScreenshotStorageServerUrl(finalPath) ?? '',
-          time_entry: entry
-            ? {
-                id: entry.id,
-                description: entry.description,
-                profile: entry.profile as Profile | undefined,
-                project_time_entries: projectsByEntry.get(shot.time_entry_id) ?? [],
-              }
-            : undefined,
-          activity_logs: logsByScreenshot.get(shot.id) ?? [],
-        }
-      })
 
       setImageUrls((prev) => {
         const next = { ...prev }
@@ -419,9 +493,10 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       })
 
       setScreenshots(screenshotsWithUrls)
+      void enrichScreenshotsInBackground(screenshotsWithUrls, requestId)
     } catch (err: any) {
       if (requestId !== fetchRequestIdRef.current) return
-      console.error('Error fetching screenshots:', err)
+      console.error('Error fetching screenshots from Supabase:', err)
       setError(err.message || 'Failed to load screenshots. Please try again.')
       setScreenshots([])
     } finally {
