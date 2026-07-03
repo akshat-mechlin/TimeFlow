@@ -708,6 +708,7 @@ export type Database = {
           taken_at: string | null
           time_entry_id: string
           type: string
+          user_id: string
         }
         Insert: {
           created_at?: string | null
@@ -716,6 +717,7 @@ export type Database = {
           taken_at?: string | null
           time_entry_id: string
           type: string
+          user_id?: string
         }
         Update: {
           created_at?: string | null
@@ -724,6 +726,7 @@ export type Database = {
           taken_at?: string | null
           time_entry_id?: string
           type?: string
+          user_id?: string
         }
         Relationships: [
           {
