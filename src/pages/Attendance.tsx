@@ -1,13 +1,19 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type ChangeEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase, hrmsSupabase } from '../lib/supabase'
-import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info, FileText } from 'lucide-react'
+import { Search, Download, Calendar, Clock, CheckCircle, XCircle, User, X, RefreshCw, Plus, Edit2, Info, FileText, Eye } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import {
+  MANUAL_ENTRY_MAX_FILE_SIZE,
+  openStorageFileInNewTab,
+  uploadManualEntryAttachment,
+  validateManualEntryFile,
+} from '../lib/timeflowStorage'
 
 type Profile = Tables<'profiles'>
 type TimeEntry = Tables<'time_entries'> & { profile?: Profile }
@@ -19,7 +25,7 @@ const QUERY_RETRY_DELAY_MS = 400
 const ATTENDANCE_TIMEOUT_MSG =
   'Query timeout - the date range or number of users may be too large. Please try selecting fewer users or a smaller date range.'
 
-const TIME_ENTRIES_SELECT = `id, user_id, start_time, end_time, duration, description, app_version,
+const TIME_ENTRIES_SELECT = `id, user_id, start_time, end_time, duration, description, app_version, is_manual_entry, manual_attachment_path,
   profile:profiles!time_entries_user_id_fkey(id, full_name, email, team),
   project_time_entries(
     project_id,
@@ -158,6 +164,8 @@ interface AttendanceRecord {
   clock_out_time: string | null
   status: 'present' | 'half_day' | 'late' | 'absent' | 'on_leave'
   leave_type?: string | null
+  is_manual_entry?: boolean
+  manual_attachment_path?: string | null
   duration: number // in seconds
   profile?: Profile
   app_version?: string | null // Tracker app version
@@ -168,6 +176,8 @@ interface AttendanceRecord {
     duration: number | null
     description: string | null
     app_version?: string | null
+    is_manual_entry?: boolean
+    manual_attachment_path?: string | null
     projects?: Array<{
       project_id: string
       project_name: string
@@ -208,6 +218,9 @@ export default function Attendance({ user }: AttendanceProps) {
     duration: '', // Duration in hours (as string for input)
     description: '',
   })
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null)
+  const [existingAttachmentPath, setExistingAttachmentPath] = useState<string | null>(null)
+  const [savingTimeEntry, setSavingTimeEntry] = useState(false)
 
   // Today and date ranges in IST so attendance is consistent regardless of machine timezone
   const getTodayIST = () => format(toZonedTime(new Date(), IST_TIMEZONE), 'yyyy-MM-dd')
@@ -450,9 +463,13 @@ export default function Attendance({ user }: AttendanceProps) {
                 duration: entry.duration,
                 description: entry.description,
                 app_version: entry.app_version || null,
+                is_manual_entry: entry.is_manual_entry ?? false,
+                manual_attachment_path: entry.manual_attachment_path ?? null,
                 projects,
               }
             })
+
+            const attachmentEntry = dayEntries.find((entry) => entry.manual_attachment_path)
 
             const mostCommonVersion = getMostCommonVersion(processedEntries.map((e) => e.app_version))
 
@@ -466,6 +483,8 @@ export default function Attendance({ user }: AttendanceProps) {
               duration: totalDuration,
               profile: userProfile,
               app_version: mostCommonVersion,
+              is_manual_entry: dayEntries.some((entry) => entry.is_manual_entry),
+              manual_attachment_path: attachmentEntry?.manual_attachment_path ?? null,
               timeEntries: processedEntries,
             })
           } else {
@@ -622,6 +641,20 @@ export default function Attendance({ user }: AttendanceProps) {
     return `${hours}h ${minutes}m`
   }
 
+  const resetTimeEntryModalState = () => {
+    setShowTimeEntryModal(false)
+    setEditingRecord(null)
+    setAttachmentFile(null)
+    setExistingAttachmentPath(null)
+    setTimeEntryForm({
+      user_id: user.id,
+      date: getTodayIST(),
+      start_time: '',
+      duration: '',
+      description: '',
+    })
+  }
+
   const openAddTimeEntryModal = () => {
     // Only allow manager and admin to add time entries
     if (user.role !== 'manager' && user.role !== 'admin') {
@@ -629,6 +662,8 @@ export default function Attendance({ user }: AttendanceProps) {
     }
     
     setEditingRecord(null)
+    setAttachmentFile(null)
+    setExistingAttachmentPath(null)
     // Default to current user if not admin/HR/manager/accountant
     const canSelectUser = ['admin', 'hr', 'manager', 'accountant'].includes(user.role)
     const defaultUserId = canSelectUser ? '' : user.id
@@ -649,6 +684,7 @@ export default function Attendance({ user }: AttendanceProps) {
     }
     
     setEditingRecord(record)
+    setAttachmentFile(null)
     // Pre-fill with the first time entry if available, or use clock in/out times
     const firstEntry = record.timeEntries && record.timeEntries.length > 0 ? record.timeEntries[0] : null
     
@@ -664,6 +700,7 @@ export default function Attendance({ user }: AttendanceProps) {
         duration: durationHours,
         description: firstEntry.description || '',
       })
+      setExistingAttachmentPath(firstEntry.manual_attachment_path || null)
     } else if (record.clock_in_time) {
       const clockIn = new Date(record.clock_in_time)
       // Convert duration from seconds to hours (with 2 decimal places)
@@ -676,6 +713,7 @@ export default function Attendance({ user }: AttendanceProps) {
         duration: durationHours,
         description: '',
       })
+      setExistingAttachmentPath(null)
     } else {
       setTimeEntryForm({
         user_id: record.user_id,
@@ -684,6 +722,7 @@ export default function Attendance({ user }: AttendanceProps) {
         duration: '',
         description: '',
       })
+      setExistingAttachmentPath(null)
     }
     setShowTimeEntryModal(true)
   }
@@ -700,12 +739,21 @@ export default function Attendance({ user }: AttendanceProps) {
       return
     }
 
+    if (attachmentFile) {
+      const validationError = validateManualEntryFile(attachmentFile)
+      if (validationError) {
+        alert(validationError)
+        return
+      }
+    }
+
     // Show confirmation modal instead of directly saving
     setShowConfirmationModal(true)
   }
 
   const handleConfirmSaveTimeEntry = async () => {
     try {
+      setSavingTimeEntry(true)
       // Close confirmation modal
       setShowConfirmationModal(false)
 
@@ -719,10 +767,12 @@ export default function Attendance({ user }: AttendanceProps) {
       }
       const duration = Math.floor(hours * 3600)
 
+      let entryId: string
+      let attachmentPath = existingAttachmentPath
+
       if (editingRecord && editingRecord.timeEntries && editingRecord.timeEntries.length > 0) {
-        // Update existing time entry
-        const entryId = editingRecord.timeEntries[0].id
-        
+        entryId = editingRecord.timeEntries[0].id
+
         const { error: updateError } = await supabase
           .from('time_entries')
           .update({
@@ -730,14 +780,14 @@ export default function Attendance({ user }: AttendanceProps) {
             end_time: null,
             duration: duration,
             description: timeEntryForm.description || null,
+            is_manual_entry: true,
             updated_at: new Date().toISOString(),
           })
           .eq('id', entryId)
 
         if (updateError) throw updateError
       } else {
-        // Create new time entry
-        const { error: insertError } = await supabase
+        const { data: insertedEntry, error: insertError } = await supabase
           .from('time_entries')
           .insert({
             user_id: timeEntryForm.user_id,
@@ -745,30 +795,90 @@ export default function Attendance({ user }: AttendanceProps) {
             end_time: null,
             duration: duration,
             description: timeEntryForm.description || null,
+            is_manual_entry: true,
           })
+          .select('id')
+          .single()
 
         if (insertError) throw insertError
+        entryId = insertedEntry.id
+      }
+
+      if (attachmentFile) {
+        try {
+          attachmentPath = await uploadManualEntryAttachment(entryId, attachmentFile)
+        } catch (uploadError: any) {
+          throw new Error(
+            `Time entry was saved, but the file upload failed: ${uploadError.message || 'Unknown upload error'}`,
+          )
+        }
+
+        const { error: attachmentError } = await supabase
+          .from('time_entries')
+          .update({
+            manual_attachment_path: attachmentPath,
+            is_manual_entry: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', entryId)
+
+        if (attachmentError) {
+          throw new Error(
+            `File uploaded, but saving the attachment path failed: ${attachmentError.message}`,
+          )
+        }
+      } else if (existingAttachmentPath) {
+        const { error: attachmentError } = await supabase
+          .from('time_entries')
+          .update({
+            manual_attachment_path: existingAttachmentPath,
+            is_manual_entry: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', entryId)
+
+        if (attachmentError) throw attachmentError
       }
 
       // Refresh attendance records
       await fetchAttendanceRecords()
-      setShowTimeEntryModal(false)
-      setEditingRecord(null)
-      setTimeEntryForm({
-        user_id: user.id,
-        date: getTodayIST(),
-        start_time: '',
-        duration: '',
-        description: '',
-      })
+      resetTimeEntryModalState()
     } catch (error: any) {
       console.error('Error saving time entry:', error)
       alert(`Error saving time entry: ${error.message || 'Unknown error'}`)
+    } finally {
+      setSavingTimeEntry(false)
     }
   }
 
   const handleCancelConfirmation = () => {
     setShowConfirmationModal(false)
+  }
+
+  const handleAttachmentFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    if (!file) {
+      setAttachmentFile(null)
+      return
+    }
+
+    const validationError = validateManualEntryFile(file)
+    if (validationError) {
+      alert(validationError)
+      event.target.value = ''
+      setAttachmentFile(null)
+      return
+    }
+
+    setAttachmentFile(file)
+  }
+
+  const handleViewManualAttachment = (storagePath: string) => {
+    try {
+      openStorageFileInNewTab(storagePath)
+    } catch (error: any) {
+      alert(error.message || 'Unable to open attachment.')
+    }
   }
 
   const filteredRecords = records.filter((record) => {
@@ -1618,6 +1728,9 @@ export default function Attendance({ user }: AttendanceProps) {
                   <span>Project/Task</span>
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                  <span>Manual Entry</span>
+                </th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                   <span>Actions</span>
                 </th>
               </tr>
@@ -1625,13 +1738,13 @@ export default function Attendance({ user }: AttendanceProps) {
             <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12">
+                  <td colSpan={9} className="px-6 py-12">
                     <Loader size="md" text="Loading attendance records" />
                   </td>
                 </tr>
               ) : filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                  <td colSpan={9} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                     <Calendar className="w-12 h-12 mx-auto mb-4 text-white dark:text-white" />
                     <p className="text-lg font-medium mb-2">No attendance records found</p>
                     <p className="text-sm text-gray-400 dark:text-gray-500">
@@ -1796,6 +1909,27 @@ export default function Attendance({ user }: AttendanceProps) {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
+                        {record.is_manual_entry ? (
+                          <div className="flex items-center justify-between gap-2 min-w-[140px]">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300">
+                              Manual Entry
+                            </span>
+                            {record.manual_attachment_path ? (
+                              <button
+                                type="button"
+                                onClick={() => handleViewManualAttachment(record.manual_attachment_path!)}
+                                className="p-1.5 rounded-lg text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+                                title="View uploaded file"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-gray-400 dark:text-gray-500">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
                         {(() => {
                           // Only show edit button for manager and admin roles
                           if (user.role !== 'manager' && user.role !== 'admin') {
@@ -1864,17 +1998,7 @@ export default function Attendance({ user }: AttendanceProps) {
                 {editingRecord ? 'Edit Time Entry' : 'Add New Time Entry'}
               </h2>
               <button
-                onClick={() => {
-                  setShowTimeEntryModal(false)
-                  setEditingRecord(null)
-                  setTimeEntryForm({
-                    user_id: user.id,
-                    date: getTodayIST(),
-                    start_time: '',
-                    duration: '',
-                    description: '',
-                  })
-                }}
+                onClick={resetTimeEntryModalState}
                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300"
               >
                 <X className="w-5 h-5" />
@@ -1972,29 +2096,56 @@ export default function Attendance({ user }: AttendanceProps) {
                 />
               </div>
 
+              {/* Supporting Document */}
+              <div>
+                <label htmlFor="manual_attachment" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Supporting Document (optional)
+                </label>
+                <input
+                  type="file"
+                  id="manual_attachment"
+                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.webp,.txt,.xls,.xlsx,.csv"
+                  onChange={handleAttachmentFileChange}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  PDF, Word, Excel, images, or text files up to {(MANUAL_ENTRY_MAX_FILE_SIZE / (1024 * 1024)).toFixed(0)} MB.
+                </p>
+                {attachmentFile ? (
+                  <p className="mt-1 text-xs text-green-600 dark:text-green-400">
+                    Selected: {attachmentFile.name}
+                  </p>
+                ) : existingAttachmentPath ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <p className="text-xs text-gray-600 dark:text-gray-400">
+                      Current file attached
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handleViewManualAttachment(existingAttachmentPath)}
+                      className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      View current file
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
               {/* Action Buttons */}
               <div className="flex items-center justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
                 <button
-                  onClick={() => {
-                    setShowTimeEntryModal(false)
-                    setEditingRecord(null)
-                    setTimeEntryForm({
-                      user_id: user.id,
-                      date: getTodayIST(),
-                      start_time: '',
-                      duration: '',
-                      description: '',
-                    })
-                  }}
+                  onClick={resetTimeEntryModalState}
                   className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSaveTimeEntry}
-                  className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all font-medium"
+                  disabled={savingTimeEntry}
+                  className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all font-medium disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {editingRecord ? 'Update Time Entry' : 'Create Time Entry'}
+                  {savingTimeEntry ? 'Saving...' : editingRecord ? 'Update Time Entry' : 'Create Time Entry'}
                 </button>
               </div>
             </div>
@@ -2057,9 +2208,10 @@ export default function Attendance({ user }: AttendanceProps) {
                 </button>
                 <button
                   onClick={handleConfirmSaveTimeEntry}
-                  className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all font-medium"
+                  disabled={savingTimeEntry}
+                  className="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all font-medium disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Confirm & {editingRecord ? 'Update' : 'Create'}
+                  {savingTimeEntry ? 'Saving...' : `Confirm & ${editingRecord ? 'Update' : 'Create'}`}
                 </button>
               </div>
             </div>

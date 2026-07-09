@@ -800,6 +800,8 @@ export type Database = {
           duration: number | null
           end_time: string | null
           id: string
+          is_manual_entry: boolean
+          manual_attachment_path: string | null
           start_time: string
           updated_at: string | null
           user_id: string
@@ -811,6 +813,8 @@ export type Database = {
           duration?: number | null
           end_time?: string | null
           id?: string
+          is_manual_entry?: boolean
+          manual_attachment_path?: string | null
           start_time?: string
           updated_at?: string | null
           user_id: string
@@ -822,6 +826,8 @@ export type Database = {
           duration?: number | null
           end_time?: string | null
           id?: string
+          is_manual_entry?: boolean
+          manual_attachment_path?: string | null
           start_time?: string
           updated_at?: string | null
           user_id?: string
