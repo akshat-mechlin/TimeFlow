@@ -1,23 +1,4 @@
-const PRODUCTION_STORAGE_URL = 'https://timeflowstorage.mechlintech.com'
-
-function resolveStorageBaseUrl(): string {
-  const configured =
-    import.meta.env.VITE_TIMEFLOW_STORAGE_URL ||
-    import.meta.env.VITE_SCREENSHOT_STORAGE_URL
-
-  if (configured) {
-    return String(configured).replace(/\/$/, '')
-  }
-
-  // In local dev, route through Vite proxy to avoid CORS / mixed-content issues.
-  if (import.meta.env.DEV) {
-    return '/storage-api'
-  }
-
-  return PRODUCTION_STORAGE_URL
-}
-
-const TIMEFLOW_STORAGE_BASE_URL = resolveStorageBaseUrl()
+const TIMEFLOW_STORAGE_BASE_URL = 'https://timeflowstorage.mechlintech.com'
 
 export const MANUAL_ENTRY_MAX_FILE_SIZE = 10 * 1024 * 1024
 
@@ -115,11 +96,8 @@ export async function uploadManualEntryAttachment(
     })
   } catch (error) {
     console.error('Storage upload network error:', error)
-    const hint = import.meta.env.DEV
-      ? ' Make sure the storage server is running (npm start in TimeFlow-Screenshots-Storage) and restart the Vite dev server after config changes.'
-      : ''
     throw new Error(
-      `Cannot reach the storage server at ${TIMEFLOW_STORAGE_BASE_URL}.${hint}`,
+      `Cannot reach the storage server at ${TIMEFLOW_STORAGE_BASE_URL}.`,
     )
   }
 
