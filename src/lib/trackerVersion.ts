@@ -7,6 +7,7 @@
  */
 
 import { supabase } from './supabase'
+import { writeUserLog } from './userLogs'
 
 export interface TrackerVersionInfo {
   requiredVersion: string
@@ -202,17 +203,20 @@ async function logVersionCheck(
   deviceInfo?: string
 ): Promise<void> {
   try {
-    await supabase.from('user_logs').insert({
-      user_id: userId,
-      log_type: isCompatible ? 'version_check_passed' : 'version_check_failed',
-      log_message: message,
+    await writeUserLog({
+      userId,
+      logType: isCompatible ? 'version_check_passed' : 'version_check_failed',
+      message,
+      source: 'other',
       metadata: {
+        api_action: 'Check required tracker version',
+        api_table: 'system_settings',
+        api_operation: 'read',
         current_version: currentVersion,
         required_version: requiredVersion,
         is_compatible: isCompatible,
       },
-      device_info: deviceInfo || null,
-      created_at: new Date().toISOString(),
+      deviceInfo: deviceInfo || null,
     })
   } catch (error) {
     // Don't throw - logging failures shouldn't break the version check

@@ -36,6 +36,20 @@ export default function Layout({ children, user }: LayoutProps) {
 
   const handleLogout = async () => {
     const { supabase } = await import('../lib/supabase')
+    const { writeUserLog } = await import('../lib/userLogs')
+    await writeUserLog({
+      userId: user.id,
+      logType: 'logout',
+      source: 'website',
+      message: `${user.full_name || user.email || 'Someone'} logged out of the website`,
+      metadata: {
+        api_action: 'Sign out',
+        api_table: 'auth',
+        api_operation: 'signOut',
+        user_email: user.email || null,
+      },
+    })
+    sessionStorage.removeItem(`activity_login_logged_${user.id}`)
     await supabase.auth.signOut()
     navigate('/login')
   }

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { supabase } from './lib/supabase'
+import { writeUserLog } from './lib/userLogs'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { ToastProvider } from './contexts/ToastContext'
 import Layout from './components/Layout'
@@ -297,7 +298,7 @@ function App() {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       // Check callback URL on auth state change too
       const queryParams = new URLSearchParams(window.location.search)
       const callbackUrl = queryParams.get('callback') || sessionStorage.getItem('oauth_callback_url')
@@ -318,6 +319,30 @@ function App() {
       
       if (session?.user) {
         fetchUserProfile(session.user.id)
+        if (event === 'SIGNED_IN') {
+          const alreadyLogged = sessionStorage.getItem(`activity_login_logged_${session.user.id}`)
+          if (!alreadyLogged) {
+            sessionStorage.setItem(`activity_login_logged_${session.user.id}`, '1')
+            const name =
+              session.user.user_metadata?.full_name ||
+              session.user.user_metadata?.name ||
+              session.user.email ||
+              'Someone'
+            writeUserLog({
+              userId: session.user.id,
+              logType: 'login',
+              source: 'website',
+              message: `${name} logged in with Azure SSO`,
+              metadata: {
+                api_action: 'Sign in',
+                api_table: 'auth',
+                api_operation: 'signIn',
+                login_method: 'azure_sso',
+                user_email: session.user.email || null,
+              },
+            })
+          }
+        }
       } else {
         setUser(null)
         setLoading(false)

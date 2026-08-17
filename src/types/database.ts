@@ -842,6 +842,42 @@ export type Database = {
           },
         ]
       }
+      resource_audit_logs: {
+        Row: {
+          actor_id: string | null
+          created_at: string
+          details: Json
+          id: string
+          operation: string
+          owner_id: string | null
+          record_id: string | null
+          resource: string
+          source: string
+        }
+        Insert: {
+          actor_id?: string | null
+          created_at?: string
+          details?: Json
+          id?: string
+          operation: string
+          owner_id?: string | null
+          record_id?: string | null
+          resource: string
+          source?: string
+        }
+        Update: {
+          actor_id?: string | null
+          created_at?: string
+          details?: Json
+          id?: string
+          operation?: string
+          owner_id?: string | null
+          record_id?: string | null
+          resource?: string
+          source?: string
+        }
+        Relationships: []
+      }
       user_logs: {
         Row: {
           created_at: string
@@ -896,6 +932,59 @@ export type Database = {
         Returns: {
           manager_id: string
           manager_type: string
+        }[]
+      }
+      get_tracker_crud_logs: {
+        Args: {
+          p_limit?: number
+          p_offset?: number
+          p_action?: string | null
+          p_search?: string | null
+          p_user_id?: string | null
+          p_source?: string | null
+          p_start?: string | null
+          p_end?: string | null
+        }
+        Returns: {
+          id: string
+          created_at: string
+          ip_address: string | null
+          action: string
+          log_type: string
+          actor_id: string | null
+          actor_email: string | null
+          actor_name: string
+          source: string
+          message: string
+          details: Record<string, unknown> | null
+          total_count: number
+        }[]
+      }
+      get_supabase_api_logs: {
+        Args: {
+          p_limit?: number
+          p_offset?: number
+          p_action?: string | null
+          p_search?: string | null
+          p_user_id?: string | null
+          p_source?: string | null
+          p_start?: string | null
+          p_end?: string | null
+          p_include_session_renewals?: boolean
+        }
+        Returns: {
+          id: string
+          created_at: string
+          ip_address: string | null
+          action: string
+          log_type: string
+          actor_id: string | null
+          actor_email: string | null
+          actor_name: string
+          source: string
+          message: string
+          details: Record<string, unknown> | null
+          total_count: number
         }[]
       }
       get_user_id_by_email: { Args: { user_email: string }; Returns: string }
