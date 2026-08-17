@@ -9,6 +9,7 @@ import {
 import { format, startOfDay, endOfDay, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
+import { writeUserLog } from '../lib/userLogs'
 import type { Tables } from '../types/database'
 
 type Profile = Tables<'profiles'>
@@ -295,6 +296,18 @@ export default function Profile({ user: initialUser, onProfileUpdate }: ProfileP
 
       setUser({ ...user, ...formData } as Profile)
       setEditing(false)
+      await writeUserLog({
+        userId: user.id,
+        logType: 'profile_update',
+        source: 'website',
+        message: `${formData.full_name || user.full_name} updated their profile`,
+        metadata: {
+          api_action: 'Update profile',
+          api_table: 'profiles',
+          api_operation: 'update',
+          user_email: formData.email || user.email,
+        },
+      })
       showSuccess('Profile updated successfully!')
     } catch (error) {
       console.error('Error updating profile:', error)

@@ -14,6 +14,7 @@ import {
   uploadManualEntryAttachment,
   validateManualEntryFile,
 } from '../lib/timeflowStorage'
+import { formatDurationForLog, formatHoursInputForLog, roleLabelForLog, writeUserLog } from '../lib/userLogs'
 
 type Profile = Tables<'profiles'>
 type TimeEntry = Tables<'time_entries'> & { profile?: Profile }
@@ -839,6 +840,45 @@ export default function Attendance({ user }: AttendanceProps) {
 
         if (attachmentError) throw attachmentError
       }
+
+      const employee =
+        teamMembers.find((member) => member.id === timeEntryForm.user_id) ||
+        editingRecord?.profile
+      const employeeName = employee?.full_name || employee?.email || 'an employee'
+      const actorName = user.full_name || user.email || 'Someone'
+      const newDurationLabel = formatHoursInputForLog(hours)
+      const previousSeconds = editingRecord?.duration ?? editingRecord?.timeEntries?.[0]?.duration ?? null
+      const previousDurationLabel =
+        previousSeconds != null ? formatDurationForLog(previousSeconds) : null
+      const isEdit = Boolean(editingRecord && editingRecord.timeEntries && editingRecord.timeEntries.length > 0)
+
+      await writeUserLog({
+        userId: timeEntryForm.user_id,
+        logType: 'manual_edit',
+        message: isEdit && previousDurationLabel
+          ? `${actorName} (${roleLabelForLog(user.role)}) changed ${employeeName}'s hours from ${previousDurationLabel} to ${newDurationLabel}`
+          : `${actorName} (${roleLabelForLog(user.role)}) set ${employeeName}'s hours to ${newDurationLabel}`,
+        source: 'website',
+        metadata: {
+          api_action: isEdit ? 'Update time entry hours' : 'Create time entry',
+          api_table: 'time_entries',
+          api_operation: isEdit ? 'update' : 'insert',
+          actor_id: user.id,
+          actor_name: actorName,
+          actor_role: user.role,
+          actor_email: user.email,
+          employee_id: timeEntryForm.user_id,
+          employee_name: employeeName,
+          time_entry_id: entryId,
+          start_time: startTime.toISOString(),
+          duration_seconds: duration,
+          previous_duration_seconds: previousSeconds,
+          previous_duration_label: previousDurationLabel,
+          new_duration_label: newDurationLabel,
+          description: timeEntryForm.description || null,
+          has_attachment: Boolean(attachmentPath),
+        },
+      })
 
       // Refresh attendance records
       await fetchAttendanceRecords()

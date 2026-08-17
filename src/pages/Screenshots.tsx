@@ -5,6 +5,10 @@ import { Search, Filter, Calendar, Image, Video, Download, Eye, User, ZoomIn, Zo
 import { format, startOfDay, endOfDay, parseISO, getHours } from 'date-fns'
 import Loader from '../components/Loader'
 import type { Tables } from '../types/database'
+import {
+  filterVisibleCaptures,
+  visibleScreenshotTypeFilter,
+} from '../lib/captureVisibility'
 
 type Profile = Tables<'profiles'>
 type Screenshot = Tables<'screenshots'>
@@ -478,9 +482,24 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       const dayStart = startOfDay(parseISO(selectedDate))
       const dayEnd = endOfDay(parseISO(selectedDate))
 
+      const { data: visibilityProfile } = await supabase
+        .from('profiles')
+        .select('enable_screenshot_capture, enable_camera_capture')
+        .eq('id', selectedUserId)
+        .maybeSingle()
+
+      const visibleFilter = visibleScreenshotTypeFilter(typeFilter, visibilityProfile)
+      if (visibleFilter === 'none') {
+        if (requestId !== fetchRequestIdRef.current) return
+        setScreenshots([])
+        return
+      }
+
       let screenshotsWithUrls =
         (await fetchScreenshotsViaRpc(dayStart, dayEnd)) ??
         (await fetchScreenshotsDirect(dayStart, dayEnd, requestId))
+
+      screenshotsWithUrls = filterVisibleCaptures(screenshotsWithUrls, visibilityProfile)
 
       if (requestId !== fetchRequestIdRef.current) return
 

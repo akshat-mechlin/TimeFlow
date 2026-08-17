@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle } from 'lucide-react'
+import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle, ScrollText } from 'lucide-react'
 import Loader from '../components/Loader'
+import ActivityLogsTab from '../components/ActivityLogsTab'
 import { useToast } from '../contexts/ToastContext'
 import {
   Chart as ChartJS,
@@ -19,6 +20,7 @@ import { Line, Bar, Pie } from 'react-chartjs-2'
 import { format, startOfMonth, endOfMonth, subDays, eachDayOfInterval } from 'date-fns'
 import type { Tables } from '../types/database'
 import { updateRequiredTrackerVersion, getTrackerVersionStats, getAllowedVersionsList, type TrackerVersionInfo } from '../lib/trackerVersion'
+import { writeUserLog } from '../lib/userLogs'
 
 ChartJS.register(
   CategoryScale,
@@ -265,6 +267,26 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         throw profileError
       }
 
+      await writeUserLog({
+        userId: authData.user.id,
+        logType: 'user_created',
+        message: `${user.full_name} created a new user account for ${newUserForm.full_name}`,
+        source: 'website',
+        metadata: {
+          api_action: 'Create user account',
+          api_table: 'profiles',
+          api_operation: 'insert',
+          actor_id: user.id,
+          actor_name: user.full_name,
+          actor_email: user.email,
+          created_user_id: authData.user.id,
+          created_user_name: newUserForm.full_name,
+          created_user_email: newUserForm.email,
+          created_user_role: newUserForm.role,
+          created_user_team: newUserForm.team || null,
+        },
+      })
+
       showSuccess('User created successfully!')
       setShowAddUserModal(false)
       setNewUserForm({
@@ -424,6 +446,24 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       fetchUsers()
       fetchTeams() // Refresh teams list in case a new one was added
 
+      await writeUserLog({
+        userId: selectedUser.id,
+        logType: 'user_updated',
+        source: 'website',
+        message: `${user.full_name} updated ${editUserForm.full_name}'s profile`,
+        metadata: {
+          api_action: 'Update user',
+          api_table: 'profiles',
+          api_operation: 'update',
+          actor_id: user.id,
+          actor_name: user.full_name,
+          actor_email: user.email,
+          employee_name: editUserForm.full_name,
+          user_email: editUserForm.email,
+          password_changed: passwordChanged,
+        },
+      })
+
       // Show appropriate message
       if (authErrorMessage) {
         // Show warning but profile was still updated successfully
@@ -459,6 +499,25 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         console.warn('Could not delete auth user (may require service role key):', authError)
       }
 
+      const deletedUser = users.find((item) => item.id === userId)
+      await writeUserLog({
+        userId: user.id,
+        logType: 'user_deleted',
+        message: `${user.full_name} removed ${deletedUser?.full_name || 'a user'}'s account`,
+        source: 'website',
+        metadata: {
+          api_action: 'Delete user account',
+          api_table: 'profiles',
+          api_operation: 'delete',
+          actor_id: user.id,
+          actor_name: user.full_name,
+          actor_email: user.email,
+          deleted_user_id: userId,
+          deleted_user_name: deletedUser?.full_name || null,
+          deleted_user_email: deletedUser?.email || null,
+        },
+      })
+
       showSuccess('User deleted successfully!')
       fetchUsers()
     } catch (error: any) {
@@ -489,10 +548,27 @@ export default function AdminPanel({ user }: AdminPanelProps) {
           : u
       ))
 
-      showSuccess(`${setting === 'screenshot' ? 'Screenshot' : 'Camera'} capture ${newValue ? 'enabled' : 'disabled'} for user`)
+      const targetUser = users.find((item) => item.id === userId)
+      await writeUserLog({
+        userId,
+        logType: 'setting_changed',
+        source: 'website',
+        message: `${user.full_name} turned ${setting} visibility ${newValue ? 'on' : 'off'} for ${targetUser?.full_name || 'a user'}`,
+        metadata: {
+          api_action: 'Update capture setting',
+          api_table: 'profiles',
+          api_operation: 'update',
+          actor_id: user.id,
+          actor_name: user.full_name,
+          employee_name: targetUser?.full_name || null,
+          setting,
+          new_value: newValue,
+        },
+      })
+      showSuccess(`${setting === 'screenshot' ? 'Screenshots' : 'Camera shots'} ${newValue ? 'are now visible' : 'are now hidden'} for this user`)
     } catch (error: any) {
-      console.error(`Error updating ${setting} capture setting:`, error)
-      showError(error.message || `Failed to update ${setting} capture setting`)
+      console.error(`Error updating ${setting} visibility setting:`, error)
+      showError(error.message || `Failed to update ${setting} visibility`)
     }
   }
 
@@ -625,6 +701,19 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       )
 
       if (result.success) {
+        await writeUserLog({
+          userId: user.id,
+          logType: 'setting_changed',
+          source: 'website',
+          message: `${user.full_name} set the required desktop app version to ${trackerVersion.requiredVersion}`,
+          metadata: {
+            api_action: 'Update required tracker version',
+            api_table: 'system_settings',
+            api_operation: 'update',
+            required_version: trackerVersion.requiredVersion,
+            force_update: trackerVersion.forceUpdate,
+          },
+        })
         showSuccess('Tracker version updated successfully!')
         await fetchTrackerVersionStats()
       } else {
@@ -838,6 +927,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
   const tabs = [
     { id: 'users', label: 'User Management', icon: Users },
+    { id: 'logs', label: 'Activity Logs', icon: ScrollText },
     { id: 'settings', label: 'System Settings', icon: Settings },
     { id: 'permissions', label: 'Permissions', icon: Shield },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
@@ -849,7 +939,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
       {/* Tabs */}
       <div className="bg-gradient-to-br from-white via-white to-gray-50 dark:from-gray-800 dark:via-gray-800 dark:to-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 backdrop-blur-sm">
-        <div className="flex items-center space-x-1 border-b border-gray-200 dark:border-gray-700 p-2">
+        <div className="flex items-center flex-wrap gap-1 border-b border-gray-200 dark:border-gray-700 p-2">
           {tabs.map((tab) => {
             const Icon = tab.icon
             return (
@@ -1012,7 +1102,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                           Manager
                         </th>
                         <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
-                          Capture Settings
+                          Show captures
                         </th>
                         <th className="px-6 py-4 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
                           Actions
@@ -1064,8 +1154,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="flex items-center space-x-4">
-                                {/* Screenshot Capture Toggle */}
-                                <div className="flex items-center space-x-2">
+                                {/* Screenshot visibility toggle — capture always continues */}
+                                <div className="flex items-center space-x-2" title="Hide or show screenshots. Capture always continues.">
                                   <Monitor className="w-4 h-4 text-gray-500 dark:text-gray-400" />
                                   <label className="relative inline-flex items-center cursor-pointer">
                                     <input
@@ -1080,8 +1170,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
                                     </span>
                                   </label>
                                 </div>
-                                {/* Camera Capture Toggle */}
-                                <div className="flex items-center space-x-2">
+                                {/* Camera visibility toggle — capture always continues */}
+                                <div className="flex items-center space-x-2" title="Hide or show camera shots. Capture always continues.">
                                   <Camera className="w-4 h-4 text-gray-500 dark:text-gray-400" />
                                   <label className="relative inline-flex items-center cursor-pointer">
                                     <input
@@ -1439,6 +1529,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
               )}
             </div>
           )}
+
+          {activeTab === 'logs' && <ActivityLogsTab />}
 
           {activeTab === 'permissions' && (
             <div className="space-y-4">

@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { Search, Filter, Plus, Edit, Eye, Clock, Users, X, Check, UserPlus, ArrowLeft, Trash2 } from 'lucide-react'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
+import { writeUserLog } from '../lib/userLogs'
 import type { Tables } from '../types/database'
 
 type Profile = Tables<'profiles'>
@@ -380,6 +381,19 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       setFormData({ ...formData, task_id: data.id })
       setNewTaskName('')
       setShowNewTaskInput(false)
+      await writeUserLog({
+        userId: user.id,
+        logType: 'task_saved',
+        source: 'website',
+        message: `${user.full_name} created task ${data.name}`,
+        metadata: {
+          api_action: 'Create task',
+          api_table: 'tasks',
+          api_operation: 'insert',
+          task_id: data.id,
+          task_name: data.name,
+        },
+      })
       showSuccess('Task created successfully!')
     } catch (error: any) {
         console.error('Error creating task:', error)
@@ -405,6 +419,19 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       setTasks(tasks.map(task => task.id === taskId ? { ...task, name: newName.trim() } : task))
       setEditingTaskId(null)
       setEditingTaskName('')
+      await writeUserLog({
+        userId: user.id,
+        logType: 'task_saved',
+        source: 'website',
+        message: `${user.full_name} renamed a task to ${newName.trim()}`,
+        metadata: {
+          api_action: 'Rename task',
+          api_table: 'tasks',
+          api_operation: 'update',
+          task_id: taskId,
+          task_name: newName.trim(),
+        },
+      })
       showSuccess('Task renamed successfully!')
     } catch (error: any) {
       console.error('Error renaming task:', error)
@@ -430,6 +457,19 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       if (formData.task_id === taskId) {
         setFormData({ ...formData, task_id: '' })
       }
+      await writeUserLog({
+        userId: user.id,
+        logType: 'task_saved',
+        source: 'website',
+        message: `${user.full_name} deleted task ${taskName}`,
+        metadata: {
+          api_action: 'Delete task',
+          api_table: 'tasks',
+          api_operation: 'delete',
+          task_id: taskId,
+          task_name: taskName,
+        },
+      })
       showSuccess('Task deleted successfully!')
     } catch (error: any) {
       console.error('Error deleting task:', error)
@@ -615,6 +655,11 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
         }
       }
 
+      const savedAsUpdate = Boolean(editingProject)
+      const savedProjectId = editingProject?.id || null
+      const savedProjectName = formData.name
+      const savedProjectStatus = formData.status
+
       setShowModal(false)
       setEditingProject(null)
       setMemberSearchTerm('')
@@ -632,6 +677,20 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       // Refresh projects list
       await fetchProjects()
       
+      await writeUserLog({
+        userId: user.id,
+        logType: 'project_saved',
+        source: 'website',
+        message: `${user.full_name} ${savedAsUpdate ? 'updated' : 'created'} project ${savedProjectName}`,
+        metadata: {
+          api_action: savedAsUpdate ? 'Update project' : 'Create project',
+          api_table: 'projects',
+          api_operation: savedAsUpdate ? 'update' : 'insert',
+          project_id: savedProjectId,
+          project_name: savedProjectName,
+          project_status: savedProjectStatus,
+        },
+      })
       showSuccess('Project saved successfully!')
     } catch (error: any) {
       console.error('Error saving project:', error)
@@ -713,6 +772,20 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       // Delete project
       const { error } = await supabase.from('projects').delete().eq('id', id)
       if (error) throw error
+      const deletedProject = projects.find((item) => item.id === id)
+      await writeUserLog({
+        userId: user.id,
+        logType: 'project_deleted',
+        source: 'website',
+        message: `${user.full_name} deleted project ${deletedProject?.name || 'a project'}`,
+        metadata: {
+          api_action: 'Delete project',
+          api_table: 'projects',
+          api_operation: 'delete',
+          project_id: id,
+          project_name: deletedProject?.name || null,
+        },
+      })
       fetchProjects()
       showSuccess('Project deleted successfully!')
     } catch (error) {

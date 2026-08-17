@@ -5,6 +5,7 @@ import { Search, Filter, User, Clock, FileText, Users, Plus, Edit, Trash2, X, Ch
 import { startOfDay, endOfDay } from 'date-fns'
 import Loader from '../components/Loader'
 import { useToast } from '../contexts/ToastContext'
+import { writeUserLog } from '../lib/userLogs'
 import type { Tables } from '../types/database'
 
 type Profile = Tables<'profiles'>
@@ -172,6 +173,20 @@ export default function TeamMembers({ user }: TeamMembersProps) {
         return
       }
 
+      await writeUserLog({
+        userId: user.id,
+        logType: 'group_saved',
+        source: 'website',
+        message: `${user.full_name} created team group ${group.name}`,
+        metadata: {
+          api_action: 'Create group',
+          api_table: 'groups',
+          api_operation: 'insert',
+          group_id: group.id,
+          group_name: group.name,
+          member_count: selectedGroupMembers.length,
+        },
+      })
       showSuccess('Group created successfully!')
       setShowGroupModal(false)
       setGroupName('')
@@ -218,6 +233,20 @@ export default function TeamMembers({ user }: TeamMembersProps) {
         if (membersError) throw membersError
       }
 
+      await writeUserLog({
+        userId: user.id,
+        logType: 'group_saved',
+        source: 'website',
+        message: `${user.full_name} updated team group ${groupName.trim()}`,
+        metadata: {
+          api_action: 'Update group',
+          api_table: 'groups',
+          api_operation: 'update',
+          group_id: editingGroup.id,
+          group_name: groupName.trim(),
+          member_count: selectedGroupMembers.length,
+        },
+      })
       showSuccess('Group updated successfully!')
       setShowGroupModal(false)
       setEditingGroup(null)
@@ -250,6 +279,19 @@ export default function TeamMembers({ user }: TeamMembersProps) {
 
       if (error) throw error
 
+      await writeUserLog({
+        userId: user.id,
+        logType: 'group_saved',
+        source: 'website',
+        message: `${user.full_name} deleted team group ${groupName}`,
+        metadata: {
+          api_action: 'Delete group',
+          api_table: 'groups',
+          api_operation: 'delete',
+          group_id: groupId,
+          group_name: groupName,
+        },
+      })
       showSuccess('Group deleted successfully!')
       fetchGroups()
     } catch (error: any) {
