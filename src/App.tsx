@@ -192,7 +192,7 @@ function AuthCallback({ onAuthSuccess }: { onAuthSuccess: (userId: string) => vo
           }
         }
       } catch (err: any) {
-        console.error('Auth callback error:', err)
+
         const errorMessage = err.message || 'Authentication failed'
         setError(errorMessage)
         setLoading(false)
@@ -376,7 +376,7 @@ function App() {
           .single()
 
         if (insertError) {
-          console.error('Error creating user profile:', insertError)
+
           throw insertError
         }
 
@@ -402,7 +402,7 @@ function App() {
 
       setUser(data)
     } catch (error) {
-      console.error('Error fetching user profile:', error)
+
     } finally {
       setLoading(false)
     }

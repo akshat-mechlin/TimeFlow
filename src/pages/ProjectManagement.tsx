@@ -90,14 +90,14 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
 
       if (error) {
         // If groups table doesn't exist, silently fail
-        console.log('Groups table may not exist yet:', error)
+
         setGroups([])
         return
       }
 
       setGroups((data || []) as Array<{ id: string; name: string; members?: Array<{ user_id: string }> }>)
     } catch (error) {
-      console.error('Error fetching groups:', error)
+
       setGroups([])
     }
   }
@@ -192,7 +192,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       if (error) throw error
       setAllUsers(data || [])
     } catch (error) {
-      console.error('Error fetching users:', error)
+
     }
   }
 
@@ -244,13 +244,13 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       }
       // Admin sees all projects (no filter)
       
-      console.log('Filtered projects before processing:', filteredData.length)
+
 
       // Calculate hours spent for each project and per member
       const projectsWithHours = await Promise.all(
         filteredData.map(async (project) => {
           // Debug: Log project members structure
-          console.log(`Project ${project.name} members:`, project.project_members)
+
           
           // Get all time entries for this project
           const { data: projectTimeEntries } = await supabase
@@ -327,8 +327,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
             return null
           }).filter(Boolean)
 
-          console.log(`Project ${project.name} - Raw members:`, rawMembers)
-          console.log(`Project ${project.name} - Normalized members count:`, members.length)
+
 
           // Fetch project manager profiles
           const projectManagerIds = (project.project_managers || []) as string[]
@@ -346,10 +345,10 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
         })
       )
 
-      console.log('Projects with hours:', projectsWithHours)
+
       setProjects(projectsWithHours)
     } catch (error) {
-      console.error('Error fetching projects:', error)
+
     } finally {
       setLoading(false)
     }
@@ -361,7 +360,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       if (error) throw error
       setTasks(data || [])
     } catch (error) {
-      console.error('Error fetching tasks:', error)
+
     }
   }
 
@@ -396,7 +395,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       })
       showSuccess('Task created successfully!')
     } catch (error: any) {
-        console.error('Error creating task:', error)
+
         showError(error.message || 'Failed to create task')
     }
   }
@@ -434,7 +433,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       })
       showSuccess('Task renamed successfully!')
     } catch (error: any) {
-      console.error('Error renaming task:', error)
+
       showError(error.message || 'Failed to rename task')
     }
   }
@@ -472,7 +471,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       })
       showSuccess('Task deleted successfully!')
     } catch (error: any) {
-      console.error('Error deleting task:', error)
+
       showError(error.message || 'Failed to delete task')
     }
   }
@@ -536,7 +535,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
           .eq('id', editingProject.id)
 
         if (projectError) {
-          console.error('Error updating project:', projectError)
+
           throw projectError
         }
 
@@ -544,13 +543,12 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
         const currentMemberIds = (editingProject.members || []).map(m => m.profile?.id).filter(Boolean) as string[]
         const newMemberIds = formData.selectedMembers.filter(Boolean)
 
-        console.log('Current members:', currentMemberIds)
-        console.log('New members:', newMemberIds)
+
 
         // Remove members that are no longer selected
         const toRemove = currentMemberIds.filter(id => !newMemberIds.includes(id))
         if (toRemove.length > 0) {
-          console.log('Removing members:', toRemove)
+
           const { error: deleteError, data: deleteData } = await supabase
             .from('project_members')
             .delete()
@@ -559,16 +557,16 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
             .select()
           
           if (deleteError) {
-            console.error('Error removing members:', deleteError)
+
             throw deleteError
           }
-          console.log('Removed members successfully:', deleteData)
+
         }
 
         // Add new members (only those not already in the project)
         const toAdd = newMemberIds.filter(id => !currentMemberIds.includes(id))
         if (toAdd.length > 0) {
-          console.log('Adding members:', toAdd)
+
           
           // Double-check existing members to avoid duplicates
           const { data: existingMembers } = await supabase
@@ -586,7 +584,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
               user_id: userId,
               role: 'member',
             }))
-            console.log('Insert data:', insertData)
+
             
             const { error: insertError, data: insertResult } = await supabase
               .from('project_members')
@@ -594,15 +592,15 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
               .select()
             
             if (insertError) {
-              console.error('Error adding members:', insertError)
+
               throw insertError
             }
-            console.log('Added members successfully:', insertResult)
+
           } else {
-            console.log('All members to add already exist in project')
+
           }
         } else if (toRemove.length === 0 && currentMemberIds.length === newMemberIds.length) {
-          console.log('No changes to project members')
+
         }
       } else {
         // Create new project
@@ -625,13 +623,13 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
           .single()
 
         if (projectError) {
-          console.error('Error creating project:', projectError)
+
           throw projectError
         }
 
         // Add project members (for new projects)
         if (formData.selectedMembers.length > 0) {
-          console.log('Adding members to new project:', formData.selectedMembers)
+
           
           // Remove any duplicate user IDs from the array
           const uniqueMemberIds = Array.from(new Set(formData.selectedMembers))
@@ -648,10 +646,10 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
             .select()
           
           if (insertError) {
-            console.error('Error adding members to new project:', insertError)
+
             throw insertError
           }
-          console.log('Added members to new project successfully:', insertResult)
+
         }
       }
 
@@ -693,7 +691,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       })
       showSuccess('Project saved successfully!')
     } catch (error: any) {
-      console.error('Error saving project:', error)
+
       showError(`Failed to save project: ${error.message || 'Unknown error'}`)
     }
   }
@@ -710,9 +708,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       return null
     }).filter(Boolean) as string[]
     
-    console.log('Editing project:', project.name)
-    console.log('Project members structure:', members)
-    console.log('Current member IDs:', memberIds)
+
     setFormData({
       name: project.name,
       description: project.description || '',
@@ -789,7 +785,7 @@ export default function ProjectManagement({ user }: ProjectManagementProps) {
       fetchProjects()
       showSuccess('Project deleted successfully!')
     } catch (error) {
-      console.error('Error deleting project:', error)
+
       showError('Failed to delete project')
     }
   }

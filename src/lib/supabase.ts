@@ -33,9 +33,7 @@ const hrmsSupabaseAnonKey =
   import.meta.env.NEXT_PUBLIC_HRMS_SUPABASE_ANON_KEY
 
 if (!hrmsSupabaseUrl || !hrmsSupabaseAnonKey) {
-  console.warn(
-    'HRMS Supabase env not set (VITE_HRMS_SUPABASE_URL / VITE_HRMS_SUPABASE_ANON_KEY). Leave features that use HRMS will fail until configured.',
-  )
+
 }
 
 export const hrmsSupabase =

@@ -480,7 +480,7 @@ export default function ActivityLogsTab() {
         setLogs(visibleRows)
         setTotalCount(visibleRows[0]?.total_count ? Number(visibleRows[0].total_count) : 0)
       } catch (err: any) {
-        console.error('Error fetching tracker CRUD logs:', err)
+
         setError(err.message || 'Could not load activity logs.')
         setLogs([])
         setTotalCount(0)

@@ -189,7 +189,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       if (error) throw error
       setUsers(data || [])
     } catch (error: any) {
-      console.error('Error fetching users:', error)
+
       showError(error.message || 'Failed to fetch users')
     } finally {
       setLoading(false)
@@ -207,7 +207,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       if (error) throw error
       setManagers(data || [])
     } catch (error) {
-      console.error('Error fetching managers:', error)
+
     }
   }
 
@@ -226,7 +226,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       uniqueTeams.sort()
       setTeams(uniqueTeams)
     } catch (error) {
-      console.error('Error fetching teams:', error)
+
     }
   }
 
@@ -301,7 +301,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       fetchUsers()
       fetchTeams() // Refresh teams list in case a new one was added
     } catch (error: any) {
-      console.error('Error creating user:', error)
+
       showError(error.message || 'Failed to create user')
     }
   }
@@ -316,7 +316,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         setSelectedUser(null)
         return
       } catch (adminError) {
-        console.warn('Admin recovery link failed, using force_password_change:', adminError)
+
       }
 
       // Alternative: Update the profile to force password change
@@ -332,7 +332,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       setShowResetPasswordModal(false)
       setSelectedUser(null)
     } catch (error: any) {
-      console.error('Error resetting password:', error)
+
       showError(error.message || 'Failed to reset password. Admin API access may be required.')
     }
   }
@@ -408,7 +408,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
               ...updateData,
             })
           } catch (authError: any) {
-            console.warn('Could not update auth user via Edge Function:', authError)
+
             authUpdateSuccess = false
             if (passwordChanged) {
               authErrorMessage = 'Profile updated, but password could not be changed.'
@@ -418,7 +418,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
           }
         }
       } catch (authError: any) {
-        console.warn('Could not update auth user:', authError)
+
         authUpdateSuccess = false
         if (passwordChanged) {
           authErrorMessage = 'Profile updated, but password could not be changed.'
@@ -469,7 +469,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         showSuccess(passwordChanged ? 'User saved successfully! Password has been changed.' : 'User saved successfully!')
       }
     } catch (error: any) {
-      console.error('Error updating user:', error)
+
       showError(error.message || 'Failed to update user')
     }
   }
@@ -493,7 +493,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       try {
         await callAdminUsers({ action: 'delete', user_id: userId })
       } catch (authError) {
-        console.warn('Could not delete auth user via Edge Function:', authError)
+
       }
 
       const deletedUser = users.find((item) => item.id === userId)
@@ -518,7 +518,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       showSuccess('User deleted successfully!')
       fetchUsers()
     } catch (error: any) {
-      console.error('Error deleting user:', error)
+
       showError(error.message || 'Failed to delete user')
     }
   }
@@ -564,7 +564,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       })
       showSuccess(`${setting === 'screenshot' ? 'Screenshots' : 'Camera shots'} ${newValue ? 'are now visible' : 'are now hidden'} for this user`)
     } catch (error: any) {
-      console.error(`Error updating ${setting} visibility setting:`, error)
+
       showError(error.message || `Failed to update ${setting} visibility`)
     }
   }
@@ -589,7 +589,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       })
       setSystemSettings(settingsMap)
     } catch (error: any) {
-      console.error('Error fetching system settings:', error)
+
       showError(error.message || 'Failed to fetch system settings')
     } finally {
       setSettingsLoading(false)
@@ -612,7 +612,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       setSystemSettings({ ...systemSettings, [key]: value })
       showSuccess('Setting saved successfully!')
     } catch (error: any) {
-      console.error('Error saving setting:', error)
+
       showError(error.message || 'Failed to save setting')
     }
   }
@@ -657,7 +657,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         forceUpdate: settingsMap.tracker_force_update === true || settingsMap.tracker_force_update === 'true',
       })
     } catch (error: any) {
-      console.error('Error fetching tracker version settings:', error)
+
       showError(error.message || 'Failed to fetch tracker version settings')
     }
   }
@@ -667,7 +667,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       const stats = await getTrackerVersionStats()
       setTrackerVersionStats(stats)
     } catch (error: any) {
-      console.error('Error fetching tracker version stats:', error)
+
     }
   }
 
@@ -717,7 +717,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         showError(result.error || 'Failed to update tracker version')
       }
     } catch (error: any) {
-      console.error('Error updating tracker version:', error)
+
       showError(error.message || 'Failed to update tracker version')
     } finally {
       setTrackerVersionLoading(false)
@@ -889,7 +889,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         topUsers,
       })
     } catch (error: any) {
-      console.error('Error fetching analytics:', error)
+
       showError(error.message || 'Failed to fetch analytics')
     } finally {
       setAnalyticsLoading(false)

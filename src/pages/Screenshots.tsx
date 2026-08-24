@@ -255,14 +255,14 @@ export default function Screenshots({ user }: ScreenshotsProps) {
           table: 'screenshots',
         },
         (payload) => {
-          console.log('Screenshot change detected:', payload.eventType)
+
           if (realtimeDebounceRef.current) clearTimeout(realtimeDebounceRef.current)
           realtimeDebounceRef.current = setTimeout(() => fetchScreenshots(), 500)
         }
       )
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          console.log('Subscribed to screenshots real-time updates')
+
         }
       })
 
@@ -298,7 +298,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
         setTeamMembers([user])
       }
     } catch (error) {
-      console.error('Error fetching team members:', error)
+
     }
   }
 
@@ -468,7 +468,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
         })),
       )
     } catch (err) {
-      console.warn('Activity/project enrichment skipped (non-fatal):', err)
+
     }
   }
 
@@ -515,7 +515,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
       void enrichScreenshotsInBackground(screenshotsWithUrls, requestId)
     } catch (err: any) {
       if (requestId !== fetchRequestIdRef.current) return
-      console.error('Error fetching screenshots from Supabase:', err)
+
       setError(err.message || 'Failed to load screenshots. Please try again.')
       setScreenshots([])
     } finally {
@@ -853,7 +853,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                             className="w-full h-full object-cover"
                             loading="lazy"
                             onError={(e) => {
-                              console.error('Failed to load image:', imageUrl, 'Path:', screenshot.storage_path)
+
                               e.currentTarget.style.display = 'none'
                               const fallback = e.currentTarget.parentElement?.querySelector('.image-fallback') as HTMLElement
                               if (fallback) fallback.classList.remove('hidden')
@@ -1149,7 +1149,7 @@ export default function Screenshots({ user }: ScreenshotsProps) {
                   }}
                   draggable={false}
                   onError={(e) => {
-                    console.error('Failed to load image in modal:', e.currentTarget.src)
+
                     e.currentTarget.style.display = 'none'
                     const fallback = e.currentTarget.parentElement?.nextElementSibling as HTMLElement
                     if (fallback) fallback.classList.remove('hidden')

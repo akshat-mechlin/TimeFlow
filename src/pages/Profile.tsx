@@ -94,7 +94,7 @@ export default function Profile({ user: initialUser, onProfileUpdate }: ProfileP
         setUser(data)
       }
     } catch (error) {
-      console.error('Error fetching user profile:', error)
+
       showError('Failed to load user profile')
     } finally {
       setLoading(false)
@@ -114,7 +114,7 @@ export default function Profile({ user: initialUser, onProfileUpdate }: ProfileP
         setProfileImageUrl(null)
       }
     } catch (error) {
-      console.error('Error fetching profile image:', error)
+
       setProfileImageUrl(null)
     }
   }
@@ -201,7 +201,7 @@ export default function Profile({ user: initialUser, onProfileUpdate }: ProfileP
         absentDays,
       })
     } catch (error) {
-      console.error('Error fetching user stats:', error)
+
     } finally {
       setStatsLoading(false)
     }
@@ -267,7 +267,7 @@ export default function Profile({ user: initialUser, onProfileUpdate }: ProfileP
         showSuccess('Profile picture updated successfully!')
       }
     } catch (error: any) {
-      console.error('Error uploading image:', error)
+
       showError(`Failed to upload image: ${error.message || 'Unknown error'}`)
     } finally {
       setUploading(false)
@@ -310,7 +310,7 @@ export default function Profile({ user: initialUser, onProfileUpdate }: ProfileP
       })
       showSuccess('Profile updated successfully!')
     } catch (error) {
-      console.error('Error updating profile:', error)
+
       showError('Failed to update profile')
     } finally {
       setLoading(false)

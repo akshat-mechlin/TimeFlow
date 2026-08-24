@@ -20,9 +20,7 @@ const publishableKey =
   ''
 
 if (!url || !publishableKey) {
-  console.warn(
-    '[write-desktop-config] Skipping: VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY not set. Electron packaged builds need this file on the web host.',
-  )
+
   process.exit(0)
 }
 
@@ -34,4 +32,4 @@ const payload = {
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true })
 fs.writeFileSync(outPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-console.log('[write-desktop-config] Wrote', outPath)
+

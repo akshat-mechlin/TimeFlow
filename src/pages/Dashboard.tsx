@@ -52,7 +52,7 @@ export default function Dashboard({ user }: DashboardProps) {
       if (error) throw error
       setRecentEntries(entries ?? [])
     } catch (e) {
-      console.error('Error fetching entries page:', e)
+
     } finally {
       setEntriesLoading(false)
     }
@@ -170,7 +170,7 @@ export default function Dashboard({ user }: DashboardProps) {
         setTeamOnline(0)
       }
     } catch (error) {
-      console.error('Error fetching dashboard data:', error)
+
     } finally {
       setLoading(false)
     }

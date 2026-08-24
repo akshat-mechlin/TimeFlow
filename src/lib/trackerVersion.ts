@@ -57,7 +57,7 @@ export function isVersionCompatible(currentVersion: string, requiredVersion: str
       (allowed) => allowed.replace(/^v/i, '').trim() === normalizedCurrent
     )
   } catch (error) {
-    console.error('Error comparing versions:', error)
+
     return false
   }
 }
@@ -79,12 +79,12 @@ export async function getRequiredTrackerVersion(): Promise<{
       .in('setting_key', ['tracker_required_version', 'tracker_update_url', 'tracker_force_update'])
 
     if (error) {
-      console.error('Error fetching tracker version settings:', error)
+
       return null
     }
 
     if (!data || data.length === 0) {
-      console.warn('No tracker version settings found. Using defaults.')
+
       return {
         requiredVersion: '1.6.0',
         updateUrl: null,
@@ -122,7 +122,7 @@ export async function getRequiredTrackerVersion(): Promise<{
         forceUpdate: settingsMap.tracker_force_update === true || settingsMap.tracker_force_update === 'true',
       }
   } catch (error) {
-    console.error('Error in getRequiredTrackerVersion:', error)
+
     return null
   }
 }
@@ -179,7 +179,7 @@ export async function checkTrackerVersion(
       currentVersion,
     }
   } catch (error) {
-    console.error('Error in checkTrackerVersion:', error)
+
     // Fail open - allow app to continue if there's an error
     return {
       requiredVersion: '1.6.0',
@@ -220,7 +220,7 @@ async function logVersionCheck(
     })
   } catch (error) {
     // Don't throw - logging failures shouldn't break the version check
-    console.error('Error logging version check:', error)
+
   }
 }
 
@@ -344,7 +344,7 @@ export async function getTrackerVersionStats(): Promise<{
       .gte('start_time', thirtyDaysAgo.toISOString())
 
     if (error) {
-      console.error('Error fetching version stats:', error)
+
       return null
     }
 
@@ -381,7 +381,7 @@ export async function getTrackerVersionStats(): Promise<{
       versionDistribution,
     }
   } catch (error) {
-    console.error('Error in getTrackerVersionStats:', error)
+
     return null
   }
 }

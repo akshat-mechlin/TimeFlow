@@ -13,4 +13,3 @@ const jsArrayString = `const filesToDelete = [\n  "${filesToDelete.join('",\n  "
 
 // 4️⃣ Save to a new JS file or print
 fs.writeFileSync('filesToDelete.js', jsArrayString)
-console.log("Converted to JS array: filesToDelete.js")

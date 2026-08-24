@@ -32,7 +32,7 @@ export async function createNotification({
     if (error) throw error
     return data
   } catch (error) {
-    console.error('Error creating notification:', error)
+
     throw error
   }
 }
@@ -110,7 +110,7 @@ export async function markNotificationAsRead(notificationId: string) {
     if (error) throw error
     return true
   } catch (error) {
-    console.error('Error marking notification as read:', error)
+
     throw error
   }
 }
@@ -129,7 +129,7 @@ export async function markAllNotificationsAsRead(userId: string) {
     if (error) throw error
     return true
   } catch (error) {
-    console.error('Error marking all notifications as read:', error)
+
     throw error
   }
 }
@@ -148,7 +148,7 @@ export async function getUnreadNotificationCount(userId: string): Promise<number
     if (error) throw error
     return count || 0
   } catch (error) {
-    console.error('Error getting unread notification count:', error)
+
     return 0
   }
 }

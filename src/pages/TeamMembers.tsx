@@ -65,7 +65,7 @@ export default function TeamMembers({ user }: TeamMembersProps) {
       )
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          console.log('Subscribed to team members real-time updates')
+
         }
       })
 
@@ -103,14 +103,14 @@ export default function TeamMembers({ user }: TeamMembersProps) {
 
       if (error) {
         // If groups table doesn't exist, silently fail (table will be created)
-        console.log('Groups table may not exist yet:', error)
+
         setGroups([])
         return
       }
 
       setGroups((data || []) as Group[])
     } catch (error) {
-      console.error('Error fetching groups:', error)
+
       setGroups([])
     }
   }
@@ -193,7 +193,7 @@ export default function TeamMembers({ user }: TeamMembersProps) {
       setSelectedGroupMembers([])
       fetchGroups()
     } catch (error: any) {
-      console.error('Error creating group:', error)
+
       showError(error.message || 'Failed to create group')
     }
   }
@@ -254,7 +254,7 @@ export default function TeamMembers({ user }: TeamMembersProps) {
       setSelectedGroupMembers([])
       fetchGroups()
     } catch (error: any) {
-      console.error('Error updating group:', error)
+
       showError(error.message || 'Failed to update group')
     }
   }
@@ -295,7 +295,7 @@ export default function TeamMembers({ user }: TeamMembersProps) {
       showSuccess('Group deleted successfully!')
       fetchGroups()
     } catch (error: any) {
-      console.error('Error deleting group:', error)
+
       showError(error.message || 'Failed to delete group')
     }
   }
@@ -374,7 +374,7 @@ export default function TeamMembers({ user }: TeamMembersProps) {
 
       setMembers(membersWithStats)
     } catch (error) {
-      console.error('Error fetching team members:', error)
+
     } finally {
       setLoading(false)
     }

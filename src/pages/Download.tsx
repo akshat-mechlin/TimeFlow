@@ -50,10 +50,10 @@ export default function Download() {
       if (versionSettings && versionSettings.requiredVersion) {
         setVersion(versionSettings.requiredVersion)
         const allowedVersions = getAllowedVersionsList(versionSettings.requiredVersion)
-        console.log('[Download App] Allowed desktop versions that can be run:', allowedVersions)
+
       }
     } catch (error) {
-      console.error('Error fetching tracker version:', error)
+
       // Keep default version from package.json if fetch fails
     }
   }
@@ -181,7 +181,7 @@ export default function Download() {
             return
           }
         } catch (e) {
-          console.error(`Error checking bucket ${bucketName}:`, e)
+
           // Continue to next bucket
           continue
         }
@@ -194,7 +194,7 @@ export default function Download() {
       })
       setLoading(false)
     } catch (error) {
-      console.error('Error fetching download links:', error)
+
       showError('Failed to fetch download links. Please try again later.')
       setLoading(false)
     }
@@ -218,7 +218,7 @@ export default function Download() {
       link.click()
       document.body.removeChild(link)
     } catch (error) {
-      console.error('Error downloading file:', error)
+
       showError('Failed to start download. Please try again.')
     }
   }

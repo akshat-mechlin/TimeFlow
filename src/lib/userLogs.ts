@@ -135,9 +135,9 @@ export async function writeUserLog({
     })
 
     if (error) {
-      console.warn('Failed to write activity log:', error.message)
+
     }
   } catch (error) {
-    console.warn('Failed to write activity log:', error)
+
   }
 }

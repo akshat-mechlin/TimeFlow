@@ -102,7 +102,7 @@ export async function uploadManualEntryAttachment(
       body: formData,
     })
   } catch (error) {
-    console.error('Storage upload network error:', error)
+
     throw new Error(
       `Cannot reach the storage server at ${TIMEFLOW_STORAGE_BASE_URL}.`,
     )

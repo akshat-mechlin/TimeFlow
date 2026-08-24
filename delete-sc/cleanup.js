@@ -7,8 +7,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-  console.error(
-    'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Copy .env.example to .env and set values from the Supabase Dashboard (never commit the service role key).',
+  process.stderr.write(
+    'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Copy .env.example to .env and set values from the Supabase Dashboard (never commit the service role key).\n',
   )
   process.exit(1)
 }
@@ -24,18 +24,14 @@ const filesToDelete = [
 
 async function deleteFiles() {
   if (!filesToDelete.length) {
-    console.log('No files specified.')
     return
   }
 
-  console.log('Deleting files:', filesToDelete)
-
-  const { data, error } = await supabase.storage.from(BUCKET).remove(filesToDelete)
+  const { error } = await supabase.storage.from(BUCKET).remove(filesToDelete)
 
   if (error) {
-    console.error('Error deleting files:', error)
-  } else {
-    console.log('Deleted files:', data)
+    process.stderr.write(`Error deleting files: ${error.message || error}\n`)
+    process.exit(1)
   }
 }
 

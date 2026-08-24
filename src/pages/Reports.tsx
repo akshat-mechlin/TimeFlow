@@ -162,7 +162,7 @@ export default function Reports({ user }: ReportsProps) {
         setProjects(projectsData || [])
       }
     } catch (error) {
-      console.error('Error fetching filter options:', error)
+
     }
   }
 
@@ -250,7 +250,7 @@ export default function Reports({ user }: ReportsProps) {
       const { data: fetchedTimeEntries, error: entriesError } = await query
 
       if (entriesError) {
-        console.error('Error fetching time entries:', entriesError)
+
         throw entriesError
       }
 
@@ -433,7 +433,7 @@ export default function Reports({ user }: ReportsProps) {
         ],
       })
     } catch (error) {
-      console.error('Error fetching report data:', error)
+
     } finally {
       setLoading(false)
     }

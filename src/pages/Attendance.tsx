@@ -305,7 +305,7 @@ export default function Attendance({ user }: AttendanceProps) {
         setTeamMembers([user])
       }
     } catch (error) {
-      console.error('Error fetching team members:', error)
+
     }
   }
 
@@ -416,7 +416,7 @@ export default function Attendance({ user }: AttendanceProps) {
               userProfile = profileData
             }
           } catch (error) {
-            console.error('Error fetching profile for user:', userId, error)
+
           }
         }
 
@@ -616,7 +616,7 @@ export default function Attendance({ user }: AttendanceProps) {
           }
         }
       } catch (error) {
-        console.error('Error fetching leave applications from HRMS:', error)
+
       }
 
       if (requestId !== fetchRequestIdRef.current) return
@@ -624,7 +624,7 @@ export default function Attendance({ user }: AttendanceProps) {
       setRecords(attendanceRecords)
     } catch (err: any) {
       if (requestId !== fetchRequestIdRef.current) return
-      console.error('Error fetching attendance:', err)
+
       const errorMessage = err.message || 'Failed to fetch attendance records. Please try again.'
       setError(errorMessage)
       setRecords([])
@@ -889,7 +889,7 @@ export default function Attendance({ user }: AttendanceProps) {
       await fetchAttendanceRecords()
       resetTimeEntryModalState()
     } catch (error: any) {
-      console.error('Error saving time entry:', error)
+
       alert(`Error saving time entry: ${error.message || 'Unknown error'}`)
     } finally {
       setSavingTimeEntry(false)
@@ -1364,13 +1364,10 @@ export default function Attendance({ user }: AttendanceProps) {
               <button 
                 onClick={handleExportPDF}
                 disabled={filteredRecords.length === 0}
-                className="relative flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed group"
+                className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-500 dark:to-purple-500 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 dark:hover:from-blue-600 dark:hover:to-purple-600 transition-all shadow-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <FileText className="w-5 h-5" />
                 <span>Export to PDF</span>
-                <span className="absolute -top-2 -right-2 bg-gradient-to-r from-red-600 to-pink-600 dark:from-red-500 dark:to-pink-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg border-2 border-white dark:border-gray-800 animate-pulse group-hover:animate-none">
-                  NEW
-                </span>
               </button>
             </div>
           </div>
