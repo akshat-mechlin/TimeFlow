@@ -9,20 +9,18 @@
 
 2. **Configure Environment Variables**
    
-   Create a `.env` file in the root directory with your Supabase credentials:
+   Create a `.env` file in the root directory with your Supabase credentials
+   (copy from `.env.example` — never commit real keys):
    ```
    # You can use either VITE_ or NEXT_PUBLIC_ prefix (both are supported)
-   NEXT_PUBLIC_SUPABASE_URL=https://yxkniwzsinqyjdqqzyjs.supabase.co
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl4a25pd3pzaW5xeWpkcXF6eWpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzY4ODY2OTMsImV4cCI6MjA1MjQ2MjY5M30.9n2wAH28zZplcHDSSDquQ9dD3zXTDoNmZ69uKSUE3Pk
+   VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+   VITE_SUPABASE_ANON_KEY=your_anon_or_publishable_key
+   VITE_HRMS_SUPABASE_URL=https://YOUR_HRMS_PROJECT_REF.supabase.co
+   VITE_HRMS_SUPABASE_ANON_KEY=your_hrms_anon_key
    ```
    
-   Or use the `VITE_` prefix:
-   ```
-   VITE_SUPABASE_URL=https://yxkniwzsinqyjdqqzyjs.supabase.co
-   VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl4a25pd3pzaW5xeWpkcXF6eWpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzY4ODY2OTMsImV4cCI6MjA1MjQ2MjY5M30.9n2wAH28zZplcHDSSDquQ9dD3zXTDoNmZ69uKSUE3Pk
-   ```
-   
-   **Note:** The application supports both `VITE_` and `NEXT_PUBLIC_` prefixes for compatibility. If no environment variables are set, it will use the default values from your Supabase project.
+   **Note:** The application supports both `VITE_` and `NEXT_PUBLIC_` prefixes.
+   There are **no hardcoded fallback keys** — missing env vars will cause startup failure.
 
 3. **Run Development Server**
    ```bash

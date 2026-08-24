@@ -521,7 +521,7 @@ export default function Attendance({ user }: AttendanceProps) {
           if (member.email) userEmails.add(member.email.toLowerCase())
         }
 
-        if (userEmails.size > 0) {
+        if (userEmails.size > 0 && hrmsSupabase) {
           const { data: allHrmsUsers } = await hrmsSupabase.from('users').select('id, email')
 
           const hrmsUsersById = new Map<string, { id: string; email: string }>()
@@ -807,7 +807,12 @@ export default function Attendance({ user }: AttendanceProps) {
 
       if (attachmentFile) {
         try {
-          attachmentPath = await uploadManualEntryAttachment(entryId, attachmentFile)
+          const { data: sessionData } = await supabase.auth.getSession()
+          attachmentPath = await uploadManualEntryAttachment(
+            entryId,
+            attachmentFile,
+            sessionData.session?.access_token,
+          )
         } catch (uploadError: any) {
           throw new Error(
             `Time entry was saved, but the file upload failed: ${uploadError.message || 'Unknown upload error'}`,

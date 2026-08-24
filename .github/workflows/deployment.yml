@@ -1,9 +1,13 @@
 name: Deploy to Self-Hosted Windows Server
+# Authoritative production deploy path for TimeFlow web (M-04).
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   IMAGE_NAME: timeflow
@@ -40,19 +44,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Create runtime .env file
-        shell: powershell
-        run: |
-          # Create .env for local reference only (not used in container)
-          @(
-            "NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}",
-            "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}",
-            "VITE_BASE_PATH=/",
-            "GIT_COMMIT=${{ env.SHORT_SHA }}",
-            "BUILD_DATE=${{ env.BUILD_DATE }}"
-          ) | Set-Content .env -Encoding utf8
-          Write-Host "Environment file created for reference"
 
       - name: Stop existing container (if any)
         shell: powershell
@@ -141,6 +132,5 @@ jobs:
         if: always()
         shell: powershell
         run: |
-          Remove-Item .env -ErrorAction SilentlyContinue
           docker logout
           docker system prune -f

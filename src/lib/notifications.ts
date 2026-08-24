@@ -20,17 +20,14 @@ export async function createNotification({
   type,
 }: CreateNotificationParams) {
   try {
-    const { data, error } = await supabase
-      .from('notifications')
-      .insert({
-        user_id: userId,
-        title,
-        message,
-        type,
-        read: false,
-      })
-      .select()
-      .single()
+    // Prefer SECURITY DEFINER RPC so managers/admins can notify other users
+    // without an open INSERT WITH CHECK (true) policy.
+    const { data, error } = await supabase.rpc('create_notification_for_user', {
+      p_user_id: userId,
+      p_title: title,
+      p_message: message,
+      p_type: type,
+    })
 
     if (error) throw error
     return data

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { sanitizeOAuthCallback } from '../lib/oauthCallbackAllowlist'
 import { useToast } from '../contexts/ToastContext'
 
 interface LoginProps {
@@ -18,21 +19,19 @@ export default function Login({ onLogin }: LoginProps) {
   // Read directly from window.location since Login is rendered outside Router
   const getCallbackUrl = () => {
     const params = new URLSearchParams(window.location.search)
-    return params.get('callback')
+    return sanitizeOAuthCallback(params.get('callback'))
   }
 
   const callbackUrl = getCallbackUrl()
 
-  // Store callback URL in sessionStorage so it persists through OAuth redirect
+  // Store allowlisted callback URL in sessionStorage so it persists through OAuth redirect
   useEffect(() => {
     if (callbackUrl) {
-      console.log('Storing callback URL in sessionStorage:', callbackUrl)
       sessionStorage.setItem('oauth_callback_url', callbackUrl)
     } else {
-      // Also check if it's already in sessionStorage (in case page was refreshed)
-      const storedCallback = sessionStorage.getItem('oauth_callback_url')
-      if (storedCallback) {
-        console.log('Found existing callback URL in sessionStorage:', storedCallback)
+      const storedCallback = sanitizeOAuthCallback(sessionStorage.getItem('oauth_callback_url'))
+      if (!storedCallback) {
+        sessionStorage.removeItem('oauth_callback_url')
       }
     }
   }, [callbackUrl])
@@ -64,13 +63,15 @@ export default function Login({ onLogin }: LoginProps) {
     try {
       setSsoLoading(true)
       
-      // Get callback URL from current URL or sessionStorage
-      const currentCallbackUrl = callbackUrl || sessionStorage.getItem('oauth_callback_url')
+      // Get allowlisted callback URL from current URL or sessionStorage
+      const currentCallbackUrl =
+        callbackUrl || sanitizeOAuthCallback(sessionStorage.getItem('oauth_callback_url'))
       
       // Ensure callback URL is stored in sessionStorage
       if (currentCallbackUrl) {
         sessionStorage.setItem('oauth_callback_url', currentCallbackUrl)
-        console.log('Initiating OAuth with callback URL:', currentCallbackUrl)
+      } else {
+        sessionStorage.removeItem('oauth_callback_url')
       }
       
       // Get the current origin for redirect URL
@@ -78,8 +79,6 @@ export default function Login({ onLogin }: LoginProps) {
       // This ensures the callback URL is preserved even if sessionStorage fails
       const callbackParam = currentCallbackUrl ? `?callback=${encodeURIComponent(currentCallbackUrl)}` : ''
       const redirectUrl = `${window.location.origin}/auth/callback${callbackParam}`
-      
-      console.log('OAuth redirect URL:', redirectUrl)
       
       // Check if tenant URL is configured in environment variables
       const azureTenantUrl = import.meta.env.VITE_AZURE_TENANT_URL || import.meta.env.NEXT_PUBLIC_AZURE_TENANT_URL

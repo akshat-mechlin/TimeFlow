@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { callAdminUsers } from '../lib/adminUsersApi'
 import { Users, Settings, Shield, BarChart3, UserPlus, Key, Search, Edit, Trash2, Mail, X, Check, Clock, Calendar, Bell, Save, Download, TrendingUp, Activity, Camera, Monitor, Package, AlertCircle, ScrollText } from 'lucide-react'
 import Loader from '../components/Loader'
 import ActivityLogsTab from '../components/ActivityLogsTab'
@@ -233,16 +234,14 @@ export default function AdminPanel({ user }: AdminPanelProps) {
     e.preventDefault()
 
     try {
-      // Create user in Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      const authData = await callAdminUsers({
+        action: 'create',
         email: newUserForm.email,
         password: newUserForm.password,
-        email_confirm: true, // Auto-confirm email
+        email_confirm: true,
       })
 
-      if (authError) throw authError
-
-      if (!authData.user) {
+      if (!authData?.user?.id) {
         throw new Error('Failed to create user account')
       }
 
@@ -263,7 +262,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
       if (profileError) {
         // If profile creation fails, try to delete the auth user
-        await supabase.auth.admin.deleteUser(authData.user.id)
+        await callAdminUsers({ action: 'delete', user_id: authData.user.id })
         throw profileError
       }
 
@@ -310,21 +309,14 @@ export default function AdminPanel({ user }: AdminPanelProps) {
   const handleResetPassword = async (userId: string, userEmail: string) => {
 
     try {
-      // Try to use admin API to generate password reset link
       try {
-        const { error: resetError } = await supabase.auth.admin.generateLink({
-          type: 'recovery',
-          email: userEmail,
-        })
-
-        if (!resetError) {
-          showSuccess('Password reset email sent to user.')
-          setShowResetPasswordModal(false)
-          setSelectedUser(null)
-          return
-        }
+        await callAdminUsers({ action: 'recovery_link', email: userEmail })
+        showSuccess('Password reset email sent to user.')
+        setShowResetPasswordModal(false)
+        setSelectedUser(null)
+        return
       } catch (adminError) {
-        console.warn('Admin API not available, using alternative method:', adminError)
+        console.warn('Admin recovery link failed, using force_password_change:', adminError)
       }
 
       // Alternative: Update the profile to force password change
@@ -409,24 +401,29 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         }
 
         if (Object.keys(updateData).length > 0) {
-          const { error: authError } = await supabase.auth.admin.updateUserById(selectedUser.id, updateData)
-          if (authError) {
-            console.warn('Could not update auth user (may require service role key):', authError)
+          try {
+            await callAdminUsers({
+              action: 'update',
+              user_id: selectedUser.id,
+              ...updateData,
+            })
+          } catch (authError: any) {
+            console.warn('Could not update auth user via Edge Function:', authError)
             authUpdateSuccess = false
             if (passwordChanged) {
-              authErrorMessage = 'Profile updated, but password could not be changed. Admin API access may be required.'
+              authErrorMessage = 'Profile updated, but password could not be changed.'
             } else if (originalEmail !== editUserForm.email) {
-              authErrorMessage = 'Profile updated, but email could not be changed. Admin API access may be required.'
+              authErrorMessage = 'Profile updated, but email could not be changed.'
             }
           }
         }
       } catch (authError: any) {
-        console.warn('Could not update auth user (may require service role key):', authError)
+        console.warn('Could not update auth user:', authError)
         authUpdateSuccess = false
         if (passwordChanged) {
-          authErrorMessage = 'Profile updated, but password could not be changed. Admin API access may be required.'
+          authErrorMessage = 'Profile updated, but password could not be changed.'
         } else if (originalEmail !== editUserForm.email) {
-          authErrorMessage = 'Profile updated, but email could not be changed. Admin API access may be required.'
+          authErrorMessage = 'Profile updated, but email could not be changed.'
         }
       }
 
@@ -492,11 +489,11 @@ export default function AdminPanel({ user }: AdminPanelProps) {
 
       if (profileError) throw profileError
 
-      // Delete from auth (if admin API is available)
+      // Delete from auth via Edge Function (service role stays server-side)
       try {
-        await supabase.auth.admin.deleteUser(userId)
+        await callAdminUsers({ action: 'delete', user_id: userId })
       } catch (authError) {
-        console.warn('Could not delete auth user (may require service role key):', authError)
+        console.warn('Could not delete auth user via Edge Function:', authError)
       }
 
       const deletedUser = users.find((item) => item.id === userId)

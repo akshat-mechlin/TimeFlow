@@ -41,7 +41,7 @@ LABEL git.commit=${GIT_COMMIT}
 LABEL build.date=${BUILD_DATE}
 LABEL maintainer="akshatpareek"
 
-# NGINX config
+# NGINX config with security headers (HSTS belongs at TLS-terminating proxy)
 RUN rm -f /etc/nginx/conf.d/default.conf && \
     printf '%s\n' \
     'server {' \
@@ -49,6 +49,12 @@ RUN rm -f /etc/nginx/conf.d/default.conf && \
     '  server_name _;' \
     '  root /usr/share/nginx/html;' \
     '  index index.html;' \
+    '' \
+    '  add_header X-Frame-Options "DENY" always;' \
+    '  add_header X-Content-Type-Options "nosniff" always;' \
+    '  add_header Referrer-Policy "strict-origin-when-cross-origin" always;' \
+    '  add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;' \
+    '  add_header Content-Security-Policy "default-src '\''self'\''; base-uri '\''self'\''; frame-ancestors '\''none'\''; object-src '\''none'\''; img-src '\''self'\'' data: https: blob:; script-src '\''self'\''; style-src '\''self'\'' '\''unsafe-inline'\''; font-src '\''self'\'' data:; connect-src '\''self'\'' https://*.supabase.co wss://*.supabase.co https://timeflowstorage.mechlintech.com; form-action '\''self'\''; https://*.supabase.co;" always;' \
     '' \
     '  # Cache immutable build assets' \
     '  location /assets {' \

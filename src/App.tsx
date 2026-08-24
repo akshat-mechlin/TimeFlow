@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { supabase } from './lib/supabase'
 import { writeUserLog } from './lib/userLogs'
+import { sanitizeOAuthCallback } from './lib/oauthCallbackAllowlist'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { ToastProvider } from './contexts/ToastContext'
 import Layout from './components/Layout'
@@ -24,15 +25,19 @@ const LoginDirect = lazy(() => import('./pages/LoginDirect'))
 // Helper function to build redirect URL with query parameters
 // Handles both custom protocol URLs (tracker://callback) and HTTP URLs (http://localhost:5174/callback)
 const buildCallbackRedirectUrl = (callbackUrl: string, params: Record<string, string>) => {
+  const allowed = sanitizeOAuthCallback(callbackUrl)
+  if (!allowed) {
+    throw new Error('Callback URL is not on the allowlist')
+  }
   try {
     // Check if it's a custom protocol URL (e.g., tracker://callback)
-    if (callbackUrl.includes('://') && !callbackUrl.startsWith('http://') && !callbackUrl.startsWith('https://')) {
+    if (allowed.includes('://') && !allowed.startsWith('http://') && !allowed.startsWith('https://')) {
       // Custom protocol - use query parameters
       const queryString = new URLSearchParams(params).toString()
-      return `${callbackUrl}?${queryString}`
+      return `${allowed}?${queryString}`
     } else {
       // HTTP/HTTPS URL - use query parameters (important for HTTP servers to read them)
-      const url = new URL(callbackUrl)
+      const url = new URL(allowed)
       Object.entries(params).forEach(([key, value]) => {
         url.searchParams.set(key, value)
       })
@@ -41,8 +46,16 @@ const buildCallbackRedirectUrl = (callbackUrl: string, params: Record<string, st
   } catch (error) {
     // Fallback: if URL parsing fails, use simple query string concatenation
     const queryString = new URLSearchParams(params).toString()
-    return `${callbackUrl}?${queryString}`
+    return `${allowed}?${queryString}`
   }
+}
+
+function resolveStoredCallback(): string | null {
+  const queryParams = new URLSearchParams(window.location.search)
+  return (
+    sanitizeOAuthCallback(queryParams.get('callback')) ||
+    sanitizeOAuthCallback(sessionStorage.getItem('oauth_callback_url'))
+  )
 }
 
 // Auth Callback component to handle OAuth redirects
@@ -68,7 +81,7 @@ function AuthCallback({ onAuthSuccess }: { onAuthSuccess: (userId: string) => vo
           setLoading(false)
           
           // Check if this is a callback (Electron app or HTTP server) - redirect with error
-          const callbackUrl = queryParams.get('callback') || sessionStorage.getItem('oauth_callback_url')
+          const callbackUrl = resolveStoredCallback()
           if (callbackUrl) {
             sessionStorage.removeItem('oauth_callback_url')
             // Use query parameters for error (important for HTTP servers)
@@ -83,21 +96,10 @@ function AuthCallback({ onAuthSuccess }: { onAuthSuccess: (userId: string) => vo
           return
         }
 
-        // For PKCE flow, we need to extract the code from URL and exchange it
+        // Get allowlisted callback URL (Electron / local desktop handoff only)
+        const callbackUrl = resolveStoredCallback()
         const code = hashParams.get('code') || queryParams.get('code')
-        
-        // Get callback URL from query params or sessionStorage (for Electron app or HTTP server)
-        // Check both places to ensure we don't lose it
-        const callbackFromQuery = queryParams.get('callback')
-        const callbackFromStorage = sessionStorage.getItem('oauth_callback_url')
-        const callbackUrl = callbackFromQuery || callbackFromStorage
-        
-        // Debug logging
-        console.log('Auth callback - Code:', code ? 'present' : 'missing')
-        console.log('Auth callback - Callback from query:', callbackFromQuery)
-        console.log('Auth callback - Callback from storage:', callbackFromStorage)
-        console.log('Auth callback - Final callback URL:', callbackUrl)
-        
+
         if (code) {
           // Exchange the authorization code for a session (PKCE flow)
           const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
@@ -110,15 +112,11 @@ function AuthCallback({ onAuthSuccess }: { onAuthSuccess: (userId: string) => vo
             // If callback URL is present (Electron app or HTTP server), redirect with tokens
             // IMPORTANT: Do this BEFORE calling onAuthSuccess to prevent navigation to dashboard
             if (callbackUrl) {
-              console.log('Redirecting to callback URL with tokens:', callbackUrl)
               sessionStorage.removeItem('oauth_callback_url')
               
               // Extract access_token and refresh_token from session
               const accessToken = data.session.access_token
               const refreshToken = data.session.refresh_token || ''
-              
-              console.log('Tokens extracted - Access token:', accessToken ? 'present' : 'missing')
-              console.log('Tokens extracted - Refresh token:', refreshToken ? 'present' : 'missing')
               
               // Build redirect URL with tokens using query parameters
               // This is important for HTTP servers which need to read query params (not hash fragments)
@@ -127,15 +125,12 @@ function AuthCallback({ onAuthSuccess }: { onAuthSuccess: (userId: string) => vo
                 refresh_token: refreshToken
               })
               
-              console.log('Final redirect URL:', redirectUrl)
-              
               // Immediately redirect - don't wait for anything else
               window.location.href = redirectUrl
               return
             }
             
             // Normal web flow - create/update profile and navigate to dashboard
-            console.log('No callback URL - proceeding with normal web flow')
             onAuthSuccess(data.session.user.id)
             // Clear the URL parameters
             window.history.replaceState({}, document.title, window.location.pathname)
@@ -203,7 +198,7 @@ function AuthCallback({ onAuthSuccess }: { onAuthSuccess: (userId: string) => vo
         
         // Check if callback URL exists and redirect with error
         const queryParams = new URLSearchParams(window.location.search)
-        const callbackUrl = queryParams.get('callback') || sessionStorage.getItem('oauth_callback_url')
+        const callbackUrl = resolveStoredCallback()
         if (callbackUrl) {
           sessionStorage.removeItem('oauth_callback_url')
           const redirectUrl = buildCallbackRedirectUrl(callbackUrl, {
@@ -254,13 +249,12 @@ function App() {
     // If user is already logged in and has a callback URL, redirect immediately
     const checkCallbackAndRedirect = async () => {
       const queryParams = new URLSearchParams(window.location.search)
-      const callbackUrl = queryParams.get('callback') || sessionStorage.getItem('oauth_callback_url')
+      const callbackUrl = resolveStoredCallback()
       
       if (callbackUrl) {
         // Check if user is already logged in
         const { data: { session } } = await supabase.auth.getSession()
         if (session?.user) {
-          console.log('User already logged in with callback URL - redirecting immediately')
           sessionStorage.removeItem('oauth_callback_url')
           
           const redirectUrl = buildCallbackRedirectUrl(callbackUrl, {
@@ -268,13 +262,11 @@ function App() {
             refresh_token: session.refresh_token || ''
           })
           
-          console.log('Redirecting to callback URL:', redirectUrl)
           window.location.href = redirectUrl
           return true // Indicate that redirect happened
         } else {
           // Store callback URL for later use
-          sessionStorage.setItem('oauth_callback_url', callbackUrl)
-          console.log('Stored callback URL for later:', callbackUrl)
+          if (callbackUrl) sessionStorage.setItem('oauth_callback_url', callbackUrl)
         }
       }
       return false
@@ -301,10 +293,9 @@ function App() {
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       // Check callback URL on auth state change too
       const queryParams = new URLSearchParams(window.location.search)
-      const callbackUrl = queryParams.get('callback') || sessionStorage.getItem('oauth_callback_url')
+      const callbackUrl = resolveStoredCallback()
       
       if (session?.user && callbackUrl) {
-        console.log('Auth state changed - user logged in with callback URL')
         sessionStorage.removeItem('oauth_callback_url')
         
         const redirectUrl = buildCallbackRedirectUrl(callbackUrl, {
@@ -312,7 +303,6 @@ function App() {
           refresh_token: session.refresh_token || ''
         })
         
-        console.log('Redirecting to callback URL:', redirectUrl)
         window.location.href = redirectUrl
         return
       }
@@ -421,14 +411,12 @@ function App() {
   useEffect(() => {
     if (user) {
       const queryParams = new URLSearchParams(window.location.search)
-      const callbackUrl = queryParams.get('callback') || sessionStorage.getItem('oauth_callback_url')
+      const callbackUrl = resolveStoredCallback()
       
       if (callbackUrl) {
-        console.log('User logged in with callback URL - checking session for tokens')
         // Get current session to extract tokens
         supabase.auth.getSession().then(({ data: { session } }) => {
           if (session) {
-            console.log('Session found - redirecting to callback URL')
             sessionStorage.removeItem('oauth_callback_url')
             
             const redirectUrl = buildCallbackRedirectUrl(callbackUrl, {
@@ -436,7 +424,6 @@ function App() {
               refresh_token: session.refresh_token || ''
             })
             
-            console.log('Redirecting to callback URL:', redirectUrl)
             window.location.href = redirectUrl
           }
         })
@@ -464,10 +451,12 @@ function App() {
                 path="/auth/callback" 
                 element={<AuthCallback onAuthSuccess={fetchUserProfile} />} 
               />
-              <Route 
-                path="/login/direct" 
-                element={<LoginDirect onLogin={fetchUserProfile} />} 
-              />
+              {import.meta.env.DEV && (
+                <Route 
+                  path="/login/direct" 
+                  element={<LoginDirect onLogin={fetchUserProfile} />} 
+                />
+              )}
               {!user ? (
                 <Route path="*" element={<Login onLogin={fetchUserProfile} />} />
               ) : (

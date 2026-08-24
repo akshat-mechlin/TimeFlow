@@ -1,10 +1,7 @@
 name: Deploy to GitHub Pages
+# Non-production / secondary surface. Authoritative production deploy is deployment.yml (self-hosted Docker).
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
 
 permissions:
@@ -26,23 +23,20 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
+      - name: npm audit (informational)
+        run: npm audit --omit=dev || true
+
       - name: Build
         env:
-          # Set base path for GitHub Pages (replace with your repo name if different)
-          # If your repo is at username.github.io/repo-name, use /repo-name/
-          # If deploying to username.github.io (root), use /
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
-          # Add your Supabase environment variables here
-          # These should be set as repository secrets in GitHub Settings
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          # Add any other VITE_ prefixed environment variables as needed
         run: npm run build
 
       - name: Setup Pages
@@ -63,4 +57,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-

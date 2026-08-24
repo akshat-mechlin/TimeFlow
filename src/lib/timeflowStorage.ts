@@ -72,6 +72,7 @@ export function buildTimeflowStorageFileUrl(storagePath: string): string | null 
 export async function uploadManualEntryAttachment(
   timeEntryId: string,
   file: File,
+  accessToken?: string,
 ): Promise<string> {
   const validationError = validateManualEntryFile(file)
   if (validationError) throw new Error(validationError)
@@ -88,10 +89,16 @@ export async function uploadManualEntryAttachment(
     uuid: timeEntryId,
   })
 
+  const headers: HeadersInit = {}
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`
+  }
+
   let response: Response
   try {
     response = await fetch(uploadUrl, {
       method: 'POST',
+      headers,
       body: formData,
     })
   } catch (error) {
