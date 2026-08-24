@@ -56,6 +56,13 @@ RUN rm -f /etc/nginx/conf.d/default.conf && \
     '  add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;' \
     '  add_header Content-Security-Policy "default-src '\''self'\''; base-uri '\''self'\''; frame-ancestors '\''none'\''; object-src '\''none'\''; img-src '\''self'\'' data: https: blob:; script-src '\''self'\''; style-src '\''self'\'' '\''unsafe-inline'\''; font-src '\''self'\'' data:; connect-src '\''self'\'' https://*.supabase.co wss://*.supabase.co https://timeflowstorage.mechlintech.com; form-action '\''self'\''; https://*.supabase.co;" always;' \
     '' \
+    '  # Desktop runtime config (publishable key — not shipped inside Electron builds)' \
+    '  location = /desktop-config.json {' \
+    '    add_header Cache-Control "no-store";' \
+    '    add_header Content-Type application/json;' \
+    '    try_files $uri =404;' \
+    '  }' \
+    '' \
     '  # Cache immutable build assets' \
     '  location /assets {' \
     '    try_files $uri =404;' \

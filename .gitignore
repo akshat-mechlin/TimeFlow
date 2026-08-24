@@ -40,6 +40,9 @@ lerna-debug.log*
 !.env.example
 !.env.*.example
 
+# Generated at web build for Electron runtime fetch — do not commit real keys
+public/desktop-config.json
+
 
 branch_structure.json
 

@@ -1,0 +1,5 @@
+{
+  "supabaseUrl": "https://YOUR_PROJECT_REF.supabase.co",
+  "supabasePublishableKey": "sb_publishable_...",
+  "updatedAt": "ISO-8601"
+}

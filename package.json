@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/write-desktop-config.mjs && vite build",
     "preview": "vite preview",
-    "build:gh-pages": "VITE_BASE_PATH=/$npm_package_name/ vite build"
+    "build:gh-pages": "node scripts/write-desktop-config.mjs && VITE_BASE_PATH=/$npm_package_name/ vite build"
   },
   "keywords": [
     "time-tracker",
