@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  ShieldAlert,
   Trash2,
 } from 'lucide-react'
 import { format, startOfWeek } from 'date-fns'
@@ -62,6 +63,8 @@ const ACTION_OPTIONS = [
   { value: 'camera', label: 'All camera photos' },
   { value: 'camera_created', label: 'Camera photo saved' },
   { value: 'camera_deleted', label: 'Camera photo deleted' },
+  { value: 'security', label: 'All security events' },
+  { value: 'devtools_attempt', label: 'DevTools access attempt' },
 ]
 
 function normalizeTimeInput(value: string, fallback: string): string {
@@ -98,6 +101,7 @@ function actionLabel(action: string): string {
 
 function actionIcon(action: string) {
   const className = 'w-3.5 h-3.5'
+  if (action === 'devtools_attempt' || action.startsWith('security')) return <ShieldAlert className={className} />
   if (action.includes('deleted')) return <Trash2 className={className} />
   if (action.includes('updated')) return <Pencil className={className} />
   if (action.startsWith('camera')) return <Camera className={className} />
@@ -129,6 +133,9 @@ function extraSummary(log: ApiLogRow): string {
     }
     return parts.length > 0 ? parts.join(' · ') : '—'
   }
+  if (log.action === 'devtools_attempt') {
+    return details.trigger ? String(details.trigger).replace(/_/g, ' ') : 'Security'
+  }
   if (details.type) return String(details.type)
   if (details.is_manual_entry) return 'Manual'
   if (details.app_version) return `v${details.app_version}`
@@ -142,7 +149,22 @@ function captureImageUrl(log: ApiLogRow): string | null {
   return screenshotPreviewUrl(details.storage_path, type)
 }
 
+function securityEvidenceUrls(log: ApiLogRow): { screenshot: string | null; camera: string | null } {
+  if (log.action !== 'devtools_attempt') return { screenshot: null, camera: null }
+  const details = log.details || {}
+  return {
+    screenshot: screenshotPreviewUrl(
+      details.screenshot_storage_path || details.storage_path,
+      'screenshot',
+    ),
+    camera: screenshotPreviewUrl(details.camera_storage_path, 'camera'),
+  }
+}
+
 function actionStyles(action: string): string {
+  if (action === 'devtools_attempt' || action.startsWith('security')) {
+    return 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  }
   if (action.includes('deleted')) {
     return 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
   }
@@ -212,6 +234,67 @@ function detailRows(log: ApiLogRow): { label: string; value: string }[] {
   if (details.storage_path) rows.push({ label: 'File path', value: String(details.storage_path) })
   if (details.time_entry_id) rows.push({ label: 'Time entry', value: String(details.time_entry_id) })
   if (details.record_id) rows.push({ label: 'Record ID', value: String(details.record_id) })
+
+  if (log.action === 'devtools_attempt') {
+    if (details.trigger) rows.push({ label: 'Trigger', value: String(details.trigger) })
+    if (details.screenshot_storage_path) {
+      rows.push({ label: 'Screenshot path', value: String(details.screenshot_storage_path) })
+    }
+    if (details.camera_storage_path) {
+      rows.push({ label: 'Camera path', value: String(details.camera_storage_path) })
+    }
+    if (details.screenshot_id) rows.push({ label: 'Screenshot ID', value: String(details.screenshot_id) })
+    if (details.camera_id) rows.push({ label: 'Camera ID', value: String(details.camera_id) })
+    if (details.screenshot_error) rows.push({ label: 'Screenshot error', value: String(details.screenshot_error) })
+    if (details.camera_error) rows.push({ label: 'Camera error', value: String(details.camera_error) })
+    if (details.href) rows.push({ label: 'Page URL', value: String(details.href) })
+    if (details.pathname) rows.push({ label: 'Path', value: String(details.pathname) })
+    if (details.platform) rows.push({ label: 'Platform', value: String(details.platform) })
+    if (details.user_agent) rows.push({ label: 'User agent', value: String(details.user_agent) })
+    if (details.device_info) rows.push({ label: 'Device', value: String(details.device_info) })
+    if (details.timezone) rows.push({ label: 'Timezone', value: String(details.timezone) })
+    if (details.language) rows.push({ label: 'Language', value: String(details.language) })
+    if (details.screen_width != null && details.screen_height != null) {
+      rows.push({
+        label: 'Screen',
+        value: `${details.screen_width}×${details.screen_height}`,
+      })
+    }
+    if (details.window_inner_width != null && details.window_inner_height != null) {
+      rows.push({
+        label: 'Window',
+        value: `${details.window_inner_width}×${details.window_inner_height}`,
+      })
+    }
+    if (details.actor_email) rows.push({ label: 'Actor email (client)', value: String(details.actor_email) })
+    if (details.actor_role) rows.push({ label: 'Role', value: String(details.actor_role) })
+    if (details.key) rows.push({ label: 'Key', value: String(details.key) })
+    if (details.recorded_at_client) {
+      const recorded = formatDetailTime(details.recorded_at_client)
+      if (recorded) rows.push({ label: 'Client time', value: recorded })
+    }
+    const shown = new Set([
+      'operation', 'log_message', 'device_info', 'user_agent', 'ip_address', 'trigger', 'href',
+      'pathname', 'platform', 'timezone', 'language', 'screen_width', 'screen_height',
+      'window_inner_width', 'window_inner_height', 'actor_email', 'actor_role', 'key',
+      'recorded_at_client', 'source', 'api_action', 'api_table', 'api_operation', 'actor_id',
+      'actor_name', 'record_id', 'ctrl', 'shift', 'alt', 'meta', 'referrer', 'languages',
+      'vendor', 'cookie_enabled', 'hardware_concurrency', 'device_memory', 'max_touch_points',
+      'online', 'timezone_offset_min', 'screen_avail_width', 'screen_avail_height',
+      'screen_color_depth', 'screen_pixel_depth', 'window_outer_width', 'window_outer_height',
+      'device_pixel_ratio', 'visibility_state', 'recorded_at',
+      'screenshot_storage_path', 'camera_storage_path', 'screenshot_id', 'camera_id',
+      'screenshot_error', 'camera_error', 'time_entry_id', 'capture_reason', 'capture_error',
+    ])
+    for (const [key, value] of Object.entries(details)) {
+      if (shown.has(key) || value == null || value === '') continue
+      if (typeof value === 'object') {
+        rows.push({ label: key.replace(/_/g, ' '), value: JSON.stringify(value) })
+      } else {
+        rows.push({ label: key.replace(/_/g, ' '), value: String(value) })
+      }
+    }
+  }
 
   return rows
 }
@@ -415,7 +498,7 @@ export default function ActivityLogsTab() {
         <div>
           <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Activity Logs</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Time entries, screenshots, and camera photos — created, updated, or deleted.
+            Time entries, screenshots, camera photos, and security events (including DevTools attempts).
           </p>
         </div>
         <button
@@ -626,26 +709,73 @@ export default function ActivityLogsTab() {
                         <tr className="bg-gray-50 dark:bg-gray-700/40">
                           <td colSpan={7} className="px-4 py-3">
                             <div className="flex flex-col lg:flex-row gap-4">
-                              {captureImageUrl(log) && (
-                                <div className="shrink-0">
-                                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                                    {log.action.startsWith('camera') ? 'Camera photo' : 'Screenshot'}
-                                  </p>
-                                  <a
-                                    href={captureImageUrl(log) || undefined}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    onClick={(event) => event.stopPropagation()}
-                                    className="block"
-                                  >
-                                    <img
-                                      src={captureImageUrl(log) || ''}
-                                      alt={log.action.startsWith('camera') ? 'Camera photo' : 'Screenshot'}
-                                      className="max-h-64 max-w-full lg:max-w-sm rounded-lg border border-gray-200 dark:border-gray-600 object-contain bg-black/40"
-                                    />
-                                  </a>
-                                </div>
-                              )}
+                              {(() => {
+                                const evidence = securityEvidenceUrls(log)
+                                const singleCapture = captureImageUrl(log)
+                                if (evidence.screenshot || evidence.camera) {
+                                  return (
+                                    <div className="shrink-0 flex flex-col sm:flex-row gap-3">
+                                      {evidence.screenshot && (
+                                        <div>
+                                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Screenshot at attempt</p>
+                                          <a
+                                            href={evidence.screenshot}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            onClick={(event) => event.stopPropagation()}
+                                            className="block"
+                                          >
+                                            <img
+                                              src={evidence.screenshot}
+                                              alt="Screenshot at DevTools attempt"
+                                              className="max-h-64 max-w-full lg:max-w-sm rounded-lg border border-gray-200 dark:border-gray-600 object-contain bg-black/40"
+                                            />
+                                          </a>
+                                        </div>
+                                      )}
+                                      {evidence.camera && (
+                                        <div>
+                                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Camera at attempt</p>
+                                          <a
+                                            href={evidence.camera}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            onClick={(event) => event.stopPropagation()}
+                                            className="block"
+                                          >
+                                            <img
+                                              src={evidence.camera}
+                                              alt="Camera at DevTools attempt"
+                                              className="max-h-64 max-w-full lg:max-w-sm rounded-lg border border-gray-200 dark:border-gray-600 object-contain bg-black/40"
+                                            />
+                                          </a>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                }
+                                if (!singleCapture) return null
+                                return (
+                                  <div className="shrink-0">
+                                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                                      {log.action.startsWith('camera') ? 'Camera photo' : 'Screenshot'}
+                                    </p>
+                                    <a
+                                      href={singleCapture}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      onClick={(event) => event.stopPropagation()}
+                                      className="block"
+                                    >
+                                      <img
+                                        src={singleCapture}
+                                        alt={log.action.startsWith('camera') ? 'Camera photo' : 'Screenshot'}
+                                        className="max-h-64 max-w-full lg:max-w-sm rounded-lg border border-gray-200 dark:border-gray-600 object-contain bg-black/40"
+                                      />
+                                    </a>
+                                  </div>
+                                )
+                              })()}
                               <dl className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm flex-1">
                                 {details.map((item) => (
                                   <div key={item.label} className="rounded-lg bg-white dark:bg-gray-800 px-3 py-2">

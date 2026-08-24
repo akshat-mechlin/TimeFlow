@@ -7,6 +7,7 @@ import { ThemeProvider } from './contexts/ThemeContext'
 import { ToastProvider } from './contexts/ToastContext'
 import Layout from './components/Layout'
 import Loader from './components/Loader'
+import DevToolsGuard from './components/DevToolsGuard'
 import type { Tables } from './types/database'
 
 // Lazy load pages for better performance
@@ -444,6 +445,7 @@ function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
+        <DevToolsGuard user={user} source="website" />
         <BrowserRouter>
           <Suspense fallback={<Loader size="lg" />}>
             <Routes>

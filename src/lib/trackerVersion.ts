@@ -117,7 +117,7 @@ export async function getRequiredTrackerVersion(): Promise<{
     })
 
       return {
-        requiredVersion: settingsMap.tracker_required_version || '1.6.0',
+        requiredVersion: settingsMap.tracker_required_version || '1.7.0',
         updateUrl: settingsMap.tracker_update_url || null,
         forceUpdate: settingsMap.tracker_force_update === true || settingsMap.tracker_force_update === 'true',
       }

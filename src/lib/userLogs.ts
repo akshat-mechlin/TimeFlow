@@ -21,6 +21,7 @@ export const ACTIVITY_LOG_TYPES = [
   'user_deleted',
   'setting_changed',
   'group_saved',
+  'devtools_attempt',
 ] as const
 
 export type ActivityLogType = (typeof ACTIVITY_LOG_TYPES)[number]
@@ -48,6 +49,7 @@ export const ACTIVITY_LOG_TYPE_LABELS: Record<string, string> = {
   group_saved: 'Team group updated',
   version_check_passed: 'App version OK',
   version_check_failed: 'App version blocked',
+  devtools_attempt: 'DevTools access attempt',
 }
 
 export type LogSource = 'desktop' | 'website' | 'other'
