@@ -20,7 +20,9 @@ const publishableKey =
   ''
 
 if (!url || !publishableKey) {
-
+  console.warn(
+    '[write-desktop-config] Skipped: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (or NEXT_PUBLIC_*) so public/desktop-config.json is generated for the desktop app.',
+  )
   process.exit(0)
 }
 

@@ -17,6 +17,19 @@ export interface TrackerVersionInfo {
   currentVersion?: string
 }
 
+/** Strip accidental wrapping quotes from DB values (e.g. from legacy JSON.stringify into JSONB). */
+function unwrapSettingString(value: string): string {
+  let s = value.trim()
+  // Peel one or more layers of wrapping quotes: "1.6.2" or "\"1.6.2\""
+  while (
+    (s.startsWith('"') && s.endsWith('"') && s.length >= 2) ||
+    (s.startsWith("'") && s.endsWith("'") && s.length >= 2)
+  ) {
+    s = s.slice(1, -1).trim()
+  }
+  return s
+}
+
 /**
  * Parses the required version string into a list of allowed versions.
  * The database value can contain multiple versions separated by commas (e.g., "1.6.1,1.6.1-beta").
@@ -25,9 +38,9 @@ function getAllowedVersions(requiredVersion: string): string[] {
   if (!requiredVersion || typeof requiredVersion !== 'string') {
     return []
   }
-  return requiredVersion
+  return unwrapSettingString(requiredVersion)
     .split(',')
-    .map((v) => v.replace(/^v/i, '').trim())
+    .map((v) => v.replace(/^["']+|["']+$/g, '').replace(/^v/i, '').trim())
     .filter(Boolean)
 }
 
@@ -111,14 +124,23 @@ export async function getRequiredTrackerVersion(): Promise<{
             value = value.slice(1, -1)
           }
         }
+        if (typeof value === 'string') {
+          value = unwrapSettingString(value)
+        }
       }
       
       settingsMap[setting.setting_key] = value
     })
 
       return {
-        requiredVersion: settingsMap.tracker_required_version || '1.7.0',
-        updateUrl: settingsMap.tracker_update_url || null,
+        requiredVersion:
+          typeof settingsMap.tracker_required_version === 'string'
+            ? unwrapSettingString(settingsMap.tracker_required_version) || '1.7.0'
+            : settingsMap.tracker_required_version || '1.7.0',
+        updateUrl:
+          typeof settingsMap.tracker_update_url === 'string'
+            ? unwrapSettingString(settingsMap.tracker_update_url) || null
+            : settingsMap.tracker_update_url || null,
         forceUpdate: settingsMap.tracker_force_update === true || settingsMap.tracker_force_update === 'true',
       }
   } catch (error) {
@@ -255,13 +277,14 @@ export async function updateRequiredTrackerVersion(
       }
     }
 
-    // Store the value as-is (comma-separated string)
+    // Store raw values into JSONB (do NOT JSON.stringify — that double-encodes and leaves literal quotes in DB)
+    const normalizedVersion = parts.join(', ')
     const { error: versionError } = await supabase
       .from('system_settings')
       .upsert(
         {
           setting_key: 'tracker_required_version',
-          setting_value: JSON.stringify(version),
+          setting_value: normalizedVersion,
           category: 'tracker',
           description: 'Required version of the Electron tracker app',
           updated_at: new Date().toISOString(),
@@ -280,7 +303,7 @@ export async function updateRequiredTrackerVersion(
         .upsert(
           {
             setting_key: 'tracker_update_url',
-            setting_value: JSON.stringify(updateUrl),
+            setting_value: updateUrl,
             category: 'tracker',
             description: 'URL where users can download the latest version',
             updated_at: new Date().toISOString(),
@@ -299,7 +322,7 @@ export async function updateRequiredTrackerVersion(
       .upsert(
         {
           setting_key: 'tracker_force_update',
-          setting_value: JSON.stringify(forceUpdate),
+          setting_value: forceUpdate,
           category: 'tracker',
           description: 'Force all tracker apps to update immediately',
           updated_at: new Date().toISOString(),

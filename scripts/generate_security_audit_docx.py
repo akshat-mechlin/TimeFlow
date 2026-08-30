@@ -15,7 +15,9 @@ from docx.shared import Cm, Inches, Pt, RGBColor
 
 ROOT = Path(__file__).resolve().parents[1]
 MD_PATH = ROOT / "SECURITY_AUDIT_REPORT.md"
-OUT_PATH = ROOT / "TimeFlow_Security_Audit_Report_v1.1.docx"
+OUT_PATH = ROOT / "TimeFlow_Security_Audit_Report.docx"
+OUT_PATH_VERSIONED = ROOT / "TimeFlow_Security_Audit_Report_v1.2.docx"
+IMPROVED_BG = "E8F5E9"
 
 NAVY = RGBColor(0x1B, 0x2A, 0x4A)
 ACCENT = RGBColor(0xC4, 0x39, 0x2B)  # severity critical accent
@@ -233,10 +235,11 @@ def build_cover(doc: Document):
         doc.add_paragraph()
 
     meta_items = [
-        ("Engagement Type", "Report-only security assessment (no remediation applied)"),
-        ("Report Date", "24 August 2026"),
-        ("Overall Posture", "Weak"),
-        ("Version", "1.0"),
+        ("Engagement Type", "Re-verification security assessment (report-only; no new remediation in this pass)"),
+        ("Report Date", "28 August 2026"),
+        ("Prior Report", "v1.0 / v1.1 — 24 August 2026"),
+        ("Overall Posture", "Improved (Moderate)"),
+        ("Version", "1.2"),
         ("Classification", "Confidential — Internal Use Only"),
         ("Methodology", "OWASP ASVS L2 (tailored) • OWASP Top 10 / API Top 10 tags • Supabase security model • GitHub Actions practices • Selected CIS controls"),
     ]
@@ -255,7 +258,7 @@ def build_cover(doc: Document):
         r1 = p1.add_run(v)
         set_run_font(r1, size=10)
         if k == "Overall Posture":
-            set_cell_shading(table.rows[i].cells[1], CRITICAL_BG)
+            set_cell_shading(table.rows[i].cells[1], IMPROVED_BG)
 
     for _ in range(3):
         doc.add_paragraph()
@@ -292,7 +295,7 @@ def setup_header_footer(doc: Document):
     run = fp.add_run("Page ")
     set_run_font(run, size=8, color=MUTED)
     add_page_number(fp)
-    run2 = fp.add_run("  •  Report-only engagement  •  24 August 2026")
+    run2 = fp.add_run("  •  Re-verification engagement  •  28 August 2026  •  v1.2")
     set_run_font(run2, size=8, color=MUTED)
 
 
@@ -446,7 +449,9 @@ def main():
     set_run_font(run, size=9, bold=True, color=ACCENT)
 
     doc.save(OUT_PATH)
+    doc.save(OUT_PATH_VERSIONED)
     print(f"Wrote {OUT_PATH}")
+    print(f"Wrote {OUT_PATH_VERSIONED}")
 
 
 if __name__ == "__main__":

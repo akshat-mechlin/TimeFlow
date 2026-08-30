@@ -602,7 +602,8 @@ export default function AdminPanel({ user }: AdminPanelProps) {
         .from('system_settings')
         .upsert({
           setting_key: key,
-          setting_value: JSON.stringify(value),
+          // JSONB column: pass raw value (JSON.stringify double-encodes and stores literal quotes)
+          setting_value: value,
           updated_at: new Date().toISOString(),
         }, {
           onConflict: 'setting_key'
@@ -635,16 +636,20 @@ export default function AdminPanel({ user }: AdminPanelProps) {
           // Try to parse if it's a JSON string (e.g., '"1.6.0"' or '{"key": "value"}')
           try {
             const parsed = JSON.parse(value)
-            // If parsed result is a string, use it (removes outer quotes)
-            // If parsed result is a string, use it (removes outer quotes)
-            // If parsed result is a string, use it (removes outer quotes)
-            // If it's an object/array/number/boolean, use the parsed value
             value = parsed
           } catch {
-            // If parsing fails, check if it's a quoted string and remove quotes
             if (value.startsWith('"') && value.endsWith('"')) {
               value = value.slice(1, -1)
             }
+          }
+          // Strip legacy wrapping quotes from double-encoded JSONB writes
+          while (
+            typeof value === 'string' &&
+            value.length >= 2 &&
+            ((value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'")))
+          ) {
+            value = value.slice(1, -1).trim()
           }
         }
         
