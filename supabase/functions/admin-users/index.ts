@@ -1,6 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
+declare const EdgeRuntime: {
+  waitUntil: (promise: Promise<unknown>) => void;
+};
+
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -51,7 +55,9 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Forbidden: admin only" }, 403);
     }
 
-    const admin = createClient(supabaseUrl, serviceRoleKey);
+    const admin = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
     const body = await req.json();
     const action = body.action as Action;
 
@@ -92,48 +98,114 @@ Deno.serve(async (req: Request) => {
           return json({ error: "You cannot delete your own account" }, 400);
         }
 
-        // Clear NO ACTION FKs that block profile (and thus auth) deletion
-        const { error: managerClearError } = await admin
-          .from("profiles")
-          .update({ manager_id: null })
-          .eq("manager_id", user_id);
-        if (managerClearError) {
+        // Fast path: only soft-delete, then return. Auth ban + purge run in background.
+        const { error: softError } = await admin.rpc("admin_soft_delete_user", {
+          p_user_id: user_id,
+        });
+        if (softError) {
           return json({
-            error: `Failed to clear manager links: ${managerClearError.message}`,
+            error: `Failed to delete user: ${softError.message}`,
           }, 400);
         }
 
-        const { error: projectsClearError } = await admin
-          .from("projects")
-          .update({ created_by: null })
-          .eq("created_by", user_id);
-        if (projectsClearError) {
-          return json({
-            error: `Failed to clear project ownership: ${projectsClearError.message}`,
-          }, 400);
-        }
+        const background = (async () => {
+          try {
+            const deletedEmail = `deleted+${user_id}@deleted.local`;
+            const { error: banError } = await admin.auth.admin.updateUserById(
+              user_id,
+              {
+                email: deletedEmail,
+                email_confirm: true,
+                ban_duration: "876600h",
+                user_metadata: {
+                  deleted: true,
+                  deleted_at: new Date().toISOString(),
+                },
+              },
+            );
+            if (banError) {
+              console.error("ban/update auth failed", banError.message);
+            }
 
-        // Prefer deleting auth user — profiles.id cascades from auth.users
-        const { error: authDeleteError } = await admin.auth.admin.deleteUser(
-          user_id,
-        );
-        if (authDeleteError) {
-          // Fallback: remove profile if auth user already gone / orphaned
-          const { error: profileDeleteError } = await admin
-            .from("profiles")
-            .delete()
-            .eq("id", user_id);
-          if (profileDeleteError) {
-            return json({
-              error:
-                authDeleteError.message ||
-                profileDeleteError.message ||
-                "Failed to delete user",
-            }, 400);
+            let done = false;
+            for (let i = 0; i < 500 && !done; i++) {
+              const { data: batch, error: purgeError } = await admin.rpc(
+                "admin_purge_user_data_batch",
+                { p_user_id: user_id },
+              );
+              if (purgeError) {
+                await admin.from("user_deletion_jobs").upsert({
+                  user_id,
+                  status: "failed",
+                  error: purgeError.message,
+                  finished_at: new Date().toISOString(),
+                });
+                console.error("purge failed", purgeError.message);
+                return;
+              }
+              done = Boolean(batch?.done);
+            }
+
+            if (!done) {
+              await admin.from("user_deletion_jobs").upsert({
+                user_id,
+                status: "failed",
+                error: "Purge did not finish within batch limit",
+                finished_at: new Date().toISOString(),
+              });
+              return;
+            }
+
+            const { error: authDeleteError } = await admin.auth.admin
+              .deleteUser(user_id);
+            if (authDeleteError) {
+              const msg = authDeleteError.message || "";
+              if (!/not found|user not found|does not exist/i.test(msg)) {
+                await admin.from("user_deletion_jobs").upsert({
+                  user_id,
+                  status: "auth_delete_failed",
+                  error: msg,
+                  finished_at: new Date().toISOString(),
+                });
+                console.error("auth delete failed", msg);
+                return;
+              }
+            }
+
+            await admin.from("user_deletion_jobs").upsert({
+              user_id,
+              status: "completed",
+              finished_at: new Date().toISOString(),
+              error: null,
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("background delete failed", message);
+            try {
+              await admin.from("user_deletion_jobs").upsert({
+                user_id,
+                status: "failed",
+                error: message,
+                finished_at: new Date().toISOString(),
+              });
+            } catch {
+              /* ignore */
+            }
           }
+        })();
+
+        try {
+          EdgeRuntime.waitUntil(background);
+        } catch {
+          background.catch(() => {});
         }
 
-        return json({ ok: true });
+        return json({
+          ok: true,
+          mode: "soft_delete_then_background_purge",
+          message:
+            "User removed. Related data (screenshots, etc.) is being cleaned up in the background.",
+        });
       }
       case "recovery_link": {
         const { email } = body;

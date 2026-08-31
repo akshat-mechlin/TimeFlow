@@ -184,6 +184,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
+        .is('deleted_at', null)
         .order('full_name', { ascending: true })
 
       if (error) throw error
@@ -201,6 +202,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       const { data, error } = await supabase
         .from('profiles')
         .select('id, full_name')
+        .is('deleted_at', null)
         .in('role', ['admin', 'manager', 'hr'])
         .order('full_name', { ascending: true })
 
@@ -216,6 +218,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       const { data, error } = await supabase
         .from('profiles')
         .select('team')
+        .is('deleted_at', null)
         .not('team', 'is', null)
         .neq('team', '')
 
@@ -475,7 +478,7 @@ export default function AdminPanel({ user }: AdminPanelProps) {
   }
 
   const handleDeleteUser = async (userId: string) => {
-    if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
+    if (!window.confirm('Are you sure you want to delete this user? They will be removed immediately. Screenshots and related data are cleaned up in the background.')) {
       return
     }
 
@@ -484,13 +487,16 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       return
     }
 
-    try {
-      const deletedUser = users.find((item) => item.id === userId)
+    const deletedUser = users.find((item) => item.id === userId)
 
-      // Full delete (FK cleanup + auth + profile) runs server-side with service role
+    // Optimistic UI: disappear immediately while server soft-deletes
+    setUsers((prev) => prev.filter((u) => u.id !== userId))
+    showSuccess('User deleted. Related data will finish cleaning up in the background.')
+
+    try {
       await callAdminUsers({ action: 'delete', user_id: userId })
 
-      await writeUserLog({
+      void writeUserLog({
         userId: user.id,
         logType: 'user_deleted',
         message: `${user.full_name} removed ${deletedUser?.full_name || 'a user'}'s account`,
@@ -506,12 +512,15 @@ export default function AdminPanel({ user }: AdminPanelProps) {
           deleted_user_name: deletedUser?.full_name || null,
           deleted_user_email: deletedUser?.email || null,
         },
-      })
-
-      showSuccess('User deleted successfully!')
-      setUsers((prev) => prev.filter((u) => u.id !== userId))
-      fetchUsers()
+      }).catch(() => {})
     } catch (error: any) {
+      if (deletedUser) {
+        setUsers((prev) =>
+          [...prev, deletedUser].sort((a, b) =>
+            (a.full_name || '').localeCompare(b.full_name || ''),
+          ),
+        )
+      }
       showError(error.message || 'Failed to delete user')
     }
   }
