@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { FunctionsHttpError } from '@supabase/supabase-js'
 
 type AdminAction = 'create' | 'update' | 'delete' | 'recovery_link'
 
@@ -16,7 +17,16 @@ export async function callAdminUsers(body: Record<string, unknown> & { action: A
   })
 
   if (error) {
-    throw new Error(error.message || 'Admin function failed')
+    let message = error.message || 'Admin function failed'
+    if (error instanceof FunctionsHttpError) {
+      try {
+        const payload = await error.context.json()
+        if (payload?.error) message = String(payload.error)
+      } catch {
+        /* keep message */
+      }
+    }
+    throw new Error(message)
   }
   if (data?.error) {
     throw new Error(String(data.error))

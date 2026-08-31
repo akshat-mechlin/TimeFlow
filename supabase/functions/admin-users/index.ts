@@ -88,8 +88,51 @@ Deno.serve(async (req: Request) => {
       case "delete": {
         const { user_id } = body;
         if (!user_id) return json({ error: "user_id required" }, 400);
-        const { error } = await admin.auth.admin.deleteUser(user_id);
-        if (error) return json({ error: error.message }, 400);
+        if (user_id === user.id) {
+          return json({ error: "You cannot delete your own account" }, 400);
+        }
+
+        // Clear NO ACTION FKs that block profile (and thus auth) deletion
+        const { error: managerClearError } = await admin
+          .from("profiles")
+          .update({ manager_id: null })
+          .eq("manager_id", user_id);
+        if (managerClearError) {
+          return json({
+            error: `Failed to clear manager links: ${managerClearError.message}`,
+          }, 400);
+        }
+
+        const { error: projectsClearError } = await admin
+          .from("projects")
+          .update({ created_by: null })
+          .eq("created_by", user_id);
+        if (projectsClearError) {
+          return json({
+            error: `Failed to clear project ownership: ${projectsClearError.message}`,
+          }, 400);
+        }
+
+        // Prefer deleting auth user — profiles.id cascades from auth.users
+        const { error: authDeleteError } = await admin.auth.admin.deleteUser(
+          user_id,
+        );
+        if (authDeleteError) {
+          // Fallback: remove profile if auth user already gone / orphaned
+          const { error: profileDeleteError } = await admin
+            .from("profiles")
+            .delete()
+            .eq("id", user_id);
+          if (profileDeleteError) {
+            return json({
+              error:
+                authDeleteError.message ||
+                profileDeleteError.message ||
+                "Failed to delete user",
+            }, 400);
+          }
+        }
+
         return json({ ok: true });
       }
       case "recovery_link": {

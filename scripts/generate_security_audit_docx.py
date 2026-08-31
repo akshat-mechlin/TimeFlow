@@ -16,7 +16,7 @@ from docx.shared import Cm, Inches, Pt, RGBColor
 ROOT = Path(__file__).resolve().parents[1]
 MD_PATH = ROOT / "SECURITY_AUDIT_REPORT.md"
 OUT_PATH = ROOT / "TimeFlow_Security_Audit_Report.docx"
-OUT_PATH_VERSIONED = ROOT / "TimeFlow_Security_Audit_Report_v1.2.docx"
+OUT_PATH_VERSIONED = ROOT / "TimeFlow_Security_Audit_Report_v1.3.docx"
 IMPROVED_BG = "E8F5E9"
 
 NAVY = RGBColor(0x1B, 0x2A, 0x4A)
@@ -235,13 +235,14 @@ def build_cover(doc: Document):
         doc.add_paragraph()
 
     meta_items = [
-        ("Engagement Type", "Re-verification security assessment (report-only; no new remediation in this pass)"),
-        ("Report Date", "28 August 2026"),
-        ("Prior Report", "v1.0 / v1.1 — 24 August 2026"),
+        ("Engagement Type", "Comparative re-verification (report-only); owner confirmed key rotation"),
+        ("Report Date", "31 August 2026"),
+        ("Prior Reports", "v1.0 / v1.1 — 24 Aug 2026; v1.2 — 28 Aug 2026"),
         ("Overall Posture", "Improved (Moderate)"),
-        ("Version", "1.2"),
+        ("Version", "1.3"),
+        ("Latest roll-up", "Resolved / Unresolved (+ detail: Fixed, Partial, Mitigated, …)"),
         ("Classification", "Confidential — Internal Use Only"),
-        ("Methodology", "OWASP ASVS L2 (tailored) • OWASP Top 10 / API Top 10 tags • Supabase security model • GitHub Actions practices • Selected CIS controls"),
+        ("Methodology", "OWASP ASVS L2 (tailored) • OWASP Top 10 / API Top 10 • Supabase model • GitHub Actions • Selected CIS • Comparative status tables"),
     ]
 
     table = doc.add_table(rows=len(meta_items), cols=2)
@@ -295,7 +296,7 @@ def setup_header_footer(doc: Document):
     run = fp.add_run("Page ")
     set_run_font(run, size=8, color=MUTED)
     add_page_number(fp)
-    run2 = fp.add_run("  •  Re-verification engagement  •  28 August 2026  •  v1.2")
+    run2 = fp.add_run("  •  Comparative re-verification  •  31 August 2026  •  v1.3")
     set_run_font(run2, size=8, color=MUTED)
 
 

@@ -33,7 +33,7 @@ Rebuild Electron with env-injected anon key (`SUPABASE_URL` / `SUPABASE_ANON_KEY
 
 ## Confirm done
 
-- [ ] New service_role in Dashboard; old key invalid
-- [ ] CI/CD secrets updated
-- [ ] Web + desktop redeployed
-- [ ] No JWT secrets remain in current tree (`rg eyJ` should not match live keys)
+- [x] New service_role in Dashboard; old key invalid *(owner confirmed 31 Aug 2026 — audit v1.3)*
+- [x] CI/CD secrets updated *(owner confirmed with key rotation)*
+- [ ] Web + desktop redeployed *(confirm if publishable key also rotated)*
+- [x] No JWT secrets remain in current tree (`rg eyJ` should not match live keys)

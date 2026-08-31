@@ -479,24 +479,17 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       return
     }
 
+    if (userId === user.id) {
+      showError('You cannot delete your own account')
+      return
+    }
 
     try {
-      // Delete from profiles table first
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', userId)
-
-      if (profileError) throw profileError
-
-      // Delete from auth via Edge Function (service role stays server-side)
-      try {
-        await callAdminUsers({ action: 'delete', user_id: userId })
-      } catch (authError) {
-
-      }
-
       const deletedUser = users.find((item) => item.id === userId)
+
+      // Full delete (FK cleanup + auth + profile) runs server-side with service role
+      await callAdminUsers({ action: 'delete', user_id: userId })
+
       await writeUserLog({
         userId: user.id,
         logType: 'user_deleted',
@@ -516,9 +509,9 @@ export default function AdminPanel({ user }: AdminPanelProps) {
       })
 
       showSuccess('User deleted successfully!')
+      setUsers((prev) => prev.filter((u) => u.id !== userId))
       fetchUsers()
     } catch (error: any) {
-
       showError(error.message || 'Failed to delete user')
     }
   }
